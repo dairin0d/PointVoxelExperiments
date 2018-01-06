@@ -54,37 +54,32 @@ public static class PointCloudFile {
 		}
 	}
 
-	static Dictionary<string, string> channel_name_map = new Dictionary<string, string>() {
-		{"x", "x"}, {"y", "y"}, {"z", "z"},
-		{"r", "r"}, {"g", "g"}, {"b", "b"},
-		{"nx", "nx"}, {"ny", "ny"}, {"nz", "nz"},
-		{"intensity", "intensity"},
-		{"red", "r"}, {"green", "g"}, {"blue", "b"},
-		{"diffuse_red", "r"}, {"diffuse_green", "g"}, {"diffuse_blue", "b"},
-		{"normal_x", "nx"}, {"normal_y", "ny"}, {"normal_z", "nz"},
-		{"rgba", "rgba"}, {"rgb", "rgba"},
-	};
-
 	// Supported: txt, csv, pcd, ply
-	public static void Read(string path, System.Action<Vector3, Color32, Vector3> callback) {
-		//if (!File.Exists(path)) return;
-
-		string ext = Path.GetExtension(path).ToLowerInvariant();
-		var channel_infos = new List<ChannelInfo>();
+	public class Reader : System.IDisposable {
+		Stream stream;
+		LineReader ts;
 		DataMode data_mode = DataMode.Text;
 		int width = -1, height = -1, ix = 0, iy = 0;
 		int i_start = 0, i_end = int.MaxValue, i_delta = 1;
+		List<ChannelInfo> channel_infos;
+		int i;
+		byte[] row;
 
-		using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read)) {
-			Stream stream = fs;
-			var ts = new LineReader(stream);
+		public Reader(string path) {
+			//if (!File.Exists(path)) return;
+
+			string ext = Path.GetExtension(path).ToLowerInvariant();
+			channel_infos = new List<ChannelInfo>();
+
+			stream = new FileStream(path, FileMode.Open, FileAccess.Read);
+			ts = new LineReader(stream);
 			if (ext == ".ply") {
-				ReadHeaderPLY(ts, channel_infos, ref data_mode, ref i_start, ref i_end, ref i_delta);
+				ReadHeaderPLY();
 				stream.Position += i_start;
 			} else if (ext == ".pcd") {
 				// All data is assumed to be little-endian
 				// http://www.pcl-developers.org/io-and-endians-td4645565.html
-				ReadHeaderPCD(ts, channel_infos, ref data_mode, ref width, ref height, ref i_delta);
+				ReadHeaderPCD();
 				// NOTE: I couldn't figure out how to correctly load the compressed files from
 				// https://github.com/PointCloudLibrary/pcl/tree/master/test (results appear
 				// to be garbled, no idea why).
@@ -102,272 +97,422 @@ public static class PointCloudFile {
 					data_mode &= ~DataMode.Compressed;
 				}
 			} else {
-				ReadHeaderASCII(ts, channel_infos);
+				ReadHeaderASCII();
 			}
 
 			if (data_mode == DataMode.Text) {
-				for (int i = 0; (!ts.EndOfStream) && (i < i_end); i++) {
-					var parts = NextRow(ts);
-					if (parts.Length == 0) break;
-					if (i < i_start) continue;
-					Vector3 pos = Vector3.zero;
-					Color32 color = new Color32(255, 255, 255, 255);
-					Vector3 normal = Vector3.zero;
-					if ((width > 0) & (height > 0)) {
-						pos = new Vector3(ix, iy, 0);
-						if (++ix >= width) { ix = 0; --iy; }
-					}
-					for (int ci = 0; ci < channel_infos.Count; ci++) {
-						var chn_info = channel_infos[ci];
-						if (chn_info.offset >= parts.Length) continue;
-						switch (chn_info.name) {
-						case "x": pos.x = ParseFloat(parts[chn_info.offset]); break;
-						case "y": pos.y = ParseFloat(parts[chn_info.offset]); break;
-						case "z": pos.z = ParseFloat(parts[chn_info.offset]); break;
-						case "r": color.r = (byte)ParseInt(parts[chn_info.offset]); break;
-						case "g": color.g = (byte)ParseInt(parts[chn_info.offset]); break;
-						case "b": color.b = (byte)ParseInt(parts[chn_info.offset]); break;
-						case "nx": normal.x = ParseFloat(parts[chn_info.offset]); break;
-						case "ny": normal.y = ParseFloat(parts[chn_info.offset]); break;
-						case "nz": normal.z = ParseFloat(parts[chn_info.offset]); break;
-						case "intensity": {
-							var v = (byte)(Mathf.Clamp01(ParseFloat(parts[chn_info.offset]))*255f);
-							color.r = color.g = color.b = v;
-							break; }
-						case "rgba": {
-							var v = ParseInt(parts[chn_info.offset]);
-							color.r = (byte)(v & 0xFF);
-							color.g = (byte)((v >> 8) & 0xFF);
-							color.b = (byte)((v >> 16) & 0xFF);
-							color.a = (byte)((v >> 24) & 0xFF);
-							break; }
-						}
-					}
-					normal.Normalize();
-					callback(pos, color, normal);
-				}
+				i = 0;
 			} else {
-				var row = new byte[i_delta];
-				for (int i = i_start; (stream.Position < stream.Length) && (i < i_end); i += i_delta) {
-					if (stream.Read(row, 0, i_delta) < i_delta) break;
-					Vector3 pos = Vector3.zero;
-					Color32 color = new Color32(255, 255, 255, 255);
-					Vector3 normal = Vector3.zero;
-					if ((width > 0) & (height > 0)) {
-						pos = new Vector3(ix, iy, 0);
-						if (++ix >= width) { ix = 0; --iy; }
-					}
-					for (int ci = 0; ci < channel_infos.Count; ci++) {
-						var chn_info = channel_infos[ci];
-						switch (chn_info.name) {
-						case "x": pos.x = ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode); break;
-						case "y": pos.y = ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode); break;
-						case "z": pos.z = ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode); break;
-						case "r": color.r = (byte)ReadInt(row, chn_info.offset, chn_info.datatype, data_mode); break;
-						case "g": color.g = (byte)ReadInt(row, chn_info.offset, chn_info.datatype, data_mode); break;
-						case "b": color.b = (byte)ReadInt(row, chn_info.offset, chn_info.datatype, data_mode); break;
-						case "nx": normal.x = ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode); break;
-						case "ny": normal.y = ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode); break;
-						case "nz": normal.z = ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode); break;
-						case "intensity": {
-							var v = (byte)(Mathf.Clamp01(ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode))*255f);
-							color.r = color.g = color.b = v;
-							break; }
-						case "rgba": {
-							var v = ReadInt(row, chn_info.offset, chn_info.datatype, data_mode);
-							color.r = (byte)(v & 0xFF);
-							color.g = (byte)((v >> 8) & 0xFF);
-							color.b = (byte)((v >> 16) & 0xFF);
-							color.a = (byte)((v >> 24) & 0xFF);
-							break; }
-						}
-					}
-					normal.Normalize();
-					callback(pos, color, normal);
-				}
+				i = i_start;
+				row = new byte[i_delta];
 			}
 		}
-	}
 
-	static void ReadHeaderPLY(LineReader ts, List<ChannelInfo> channel_infos, ref DataMode data_mode, ref int i_start, ref int i_end, ref int i_delta) {
-		int prev_count = 0, prev_size = 0, last_count = 0, vertex_count = 0, prop_offset = 0;
-		bool before_vertex = true, after_vertex = false;
-		i_start = i_end = 0; i_delta = 1;
-		while (!ts.EndOfStream) {
-			var parts = NextRow(ts);
-			if (parts.Length == 0) break;
-			if (parts[0] == "format") {
-				if (parts.Length > 1) {
-					if (parts[1] == "binary_little_endian") {
-						data_mode = DataMode.LittleEndian;
-					} else if (parts[1] == "binary_big_endian") {
-						data_mode = DataMode.BigEndian;
-					} else {
-						data_mode = DataMode.Text;
+		public void Dispose() {
+			if (stream == null) return;
+			stream.Close();
+			stream.Dispose();
+			stream = null;
+		}
+
+		public bool EndOfStream {
+			get { return (stream == null) || (stream.Position >= stream.Length); }
+		}
+
+		public bool Read(out Vector3 pos, out Color32 color, out Vector3 normal) {
+			pos = Vector3.zero;
+			color = new Color32(255, 255, 255, 255);
+			normal = Vector3.zero;
+			if (EndOfStream || (i >= i_end)) return false;
+
+			string[] parts = null;
+			if (data_mode == DataMode.Text) {
+				while (true) {
+					parts = NextRow(ts);
+					if (parts.Length == 0) return false;
+					if (i >= i_start) break;
+					i++;
+				}
+			} else {
+				if (stream.Read(row, 0, i_delta) < i_delta) return false;
+			}
+
+			if ((width > 0) & (height > 0)) {
+				pos = new Vector3(ix, iy, 0);
+				if (++ix >= width) { ix = 0; --iy; }
+			}
+
+			byte vb = 0; int vi = 0;
+			if (data_mode == DataMode.Text) {
+				for (int ci = 0; ci < channel_infos.Count; ci++) {
+					var chn_info = channel_infos[ci];
+					if (chn_info.offset >= parts.Length) continue;
+					switch (chn_info.name) {
+					case "x": pos.x = ParseFloat(parts[chn_info.offset]); break;
+					case "y": pos.y = ParseFloat(parts[chn_info.offset]); break;
+					case "z": pos.z = ParseFloat(parts[chn_info.offset]); break;
+					case "r": color.r = (byte)ParseInt(parts[chn_info.offset]); break;
+					case "g": color.g = (byte)ParseInt(parts[chn_info.offset]); break;
+					case "b": color.b = (byte)ParseInt(parts[chn_info.offset]); break;
+					case "nx": normal.x = ParseFloat(parts[chn_info.offset]); break;
+					case "ny": normal.y = ParseFloat(parts[chn_info.offset]); break;
+					case "nz": normal.z = ParseFloat(parts[chn_info.offset]); break;
+					case "intensity":
+						vb = (byte)(Mathf.Clamp01(ParseFloat(parts[chn_info.offset]))*255f);
+						color.r = color.g = color.b = vb;
+						break;
+					case "rgba":
+						vi = ParseInt(parts[chn_info.offset]);
+						color.r = (byte)(vi & 0xFF);
+						color.g = (byte)((vi >> 8) & 0xFF);
+						color.b = (byte)((vi >> 16) & 0xFF);
+						color.a = (byte)((vi >> 24) & 0xFF);
+						break;
 					}
 				}
-			} else if (parts[0] == "element") {
-				if (parts.Length > 2) {
-					last_count = ParseInt(parts[2]);
-					if (parts[1] == "vertex") {
-						before_vertex = after_vertex = false;
-						vertex_count = last_count;
-					} else {
-						if (!before_vertex) after_vertex = true;
-						if (before_vertex) prev_count += last_count;
+			} else {
+				for (int ci = 0; ci < channel_infos.Count; ci++) {
+					var chn_info = channel_infos[ci];
+					switch (chn_info.name) {
+					case "x": pos.x = ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode); break;
+					case "y": pos.y = ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode); break;
+					case "z": pos.z = ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode); break;
+					case "r": color.r = (byte)ReadInt(row, chn_info.offset, chn_info.datatype, data_mode); break;
+					case "g": color.g = (byte)ReadInt(row, chn_info.offset, chn_info.datatype, data_mode); break;
+					case "b": color.b = (byte)ReadInt(row, chn_info.offset, chn_info.datatype, data_mode); break;
+					case "nx": normal.x = ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode); break;
+					case "ny": normal.y = ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode); break;
+					case "nz": normal.z = ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode); break;
+					case "intensity":
+						vb = (byte)(Mathf.Clamp01(ReadFloat(row, chn_info.offset, chn_info.datatype, data_mode))*255f);
+						color.r = color.g = color.b = vb;
+						break;
+					case "rgba":
+						vi = ReadInt(row, chn_info.offset, chn_info.datatype, data_mode);
+						color.r = (byte)(vi & 0xFF);
+						color.g = (byte)((vi >> 8) & 0xFF);
+						color.b = (byte)((vi >> 16) & 0xFF);
+						color.a = (byte)((vi >> 24) & 0xFF);
+						break;
 					}
 				}
-			} else if (parts[0] == "property") {
-				if (parts.Length > 1) {
-					int prop_size = 0;
-					DataType dtype = DataType.F4;
-					switch (parts[1]) {
-					case "char": prop_size = 1; dtype = DataType.I1; break;
-					case "uchar": prop_size = 1; dtype = DataType.U1; break;
-					case "short": prop_size = 2; dtype = DataType.I2; break;
-					case "ushort": prop_size = 2; dtype = DataType.U2; break;
-					case "int": prop_size = 4; dtype = DataType.I4; break;
-					case "uint": prop_size = 4; dtype = DataType.U4; break;
-					case "long": prop_size = 8; dtype = DataType.I8; break;
-					case "ulong": prop_size = 8; dtype = DataType.U8; break;
-					case "float": prop_size = 4; dtype = DataType.F4; break;
-					case "double": prop_size = 8; dtype = DataType.F8; break;
-					case "int8": prop_size = 1; dtype = DataType.I1; break;
-					case "uint8": prop_size = 1; dtype = DataType.U1; break;
-					case "int16": prop_size = 2; dtype = DataType.I2; break;
-					case "uint16": prop_size = 2; dtype = DataType.U2; break;
-					case "int32": prop_size = 4; dtype = DataType.I4; break;
-					case "uint32": prop_size = 4; dtype = DataType.U4; break;
-					case "int64": prop_size = 8; dtype = DataType.I8; break;
-					case "uint64": prop_size = 8; dtype = DataType.U8; break;
-					case "float32": prop_size = 4; dtype = DataType.F4; break;
-					case "float64": prop_size = 8; dtype = DataType.F4; break;
+			}
+
+			normal.Normalize();
+
+			i += i_delta;
+			return true;
+		}
+
+		static Dictionary<string, string> channel_name_map = new Dictionary<string, string>() {
+			{"x", "x"}, {"y", "y"}, {"z", "z"},
+			{"r", "r"}, {"g", "g"}, {"b", "b"},
+			{"nx", "nx"}, {"ny", "ny"}, {"nz", "nz"},
+			{"intensity", "intensity"},
+			{"red", "r"}, {"green", "g"}, {"blue", "b"},
+			{"diffuse_red", "r"}, {"diffuse_green", "g"}, {"diffuse_blue", "b"},
+			{"normal_x", "nx"}, {"normal_y", "ny"}, {"normal_z", "nz"},
+			{"rgba", "rgba"}, {"rgb", "rgba"},
+		};
+
+		void ReadHeaderPLY() {
+			int prev_count = 0, prev_size = 0, last_count = 0, vertex_count = 0, prop_offset = 0;
+			bool before_vertex = true, after_vertex = false;
+			i_start = i_end = 0; i_delta = 1;
+			while (!ts.EndOfStream) {
+				var parts = NextRow(ts);
+				if (parts.Length == 0) break;
+				if (parts[0] == "format") {
+					if (parts.Length > 1) {
+						if (parts[1] == "binary_little_endian") {
+							data_mode = DataMode.LittleEndian;
+						} else if (parts[1] == "binary_big_endian") {
+							data_mode = DataMode.BigEndian;
+						} else {
+							data_mode = DataMode.Text;
+						}
 					}
-					if (before_vertex | after_vertex) {
-						if (before_vertex) prev_size += last_count * prop_size;
-					} else {
-						if (parts.Length > 2) {
-							string mapped_name;
-							if (channel_name_map.TryGetValue(parts[2], out mapped_name)) {
-								channel_infos.Add(new ChannelInfo(mapped_name, prop_offset, dtype));
+				} else if (parts[0] == "element") {
+					if (parts.Length > 2) {
+						last_count = ParseInt(parts[2]);
+						if (parts[1] == "vertex") {
+							before_vertex = after_vertex = false;
+							vertex_count = last_count;
+						} else {
+							if (!before_vertex) after_vertex = true;
+							if (before_vertex) prev_count += last_count;
+						}
+					}
+				} else if (parts[0] == "property") {
+					if (parts.Length > 1) {
+						int prop_size = 0;
+						DataType dtype = DataType.F4;
+						switch (parts[1]) {
+						case "char": prop_size = 1; dtype = DataType.I1; break;
+						case "uchar": prop_size = 1; dtype = DataType.U1; break;
+						case "short": prop_size = 2; dtype = DataType.I2; break;
+						case "ushort": prop_size = 2; dtype = DataType.U2; break;
+						case "int": prop_size = 4; dtype = DataType.I4; break;
+						case "uint": prop_size = 4; dtype = DataType.U4; break;
+						case "long": prop_size = 8; dtype = DataType.I8; break;
+						case "ulong": prop_size = 8; dtype = DataType.U8; break;
+						case "float": prop_size = 4; dtype = DataType.F4; break;
+						case "double": prop_size = 8; dtype = DataType.F8; break;
+						case "int8": prop_size = 1; dtype = DataType.I1; break;
+						case "uint8": prop_size = 1; dtype = DataType.U1; break;
+						case "int16": prop_size = 2; dtype = DataType.I2; break;
+						case "uint16": prop_size = 2; dtype = DataType.U2; break;
+						case "int32": prop_size = 4; dtype = DataType.I4; break;
+						case "uint32": prop_size = 4; dtype = DataType.U4; break;
+						case "int64": prop_size = 8; dtype = DataType.I8; break;
+						case "uint64": prop_size = 8; dtype = DataType.U8; break;
+						case "float32": prop_size = 4; dtype = DataType.F4; break;
+						case "float64": prop_size = 8; dtype = DataType.F4; break;
+						}
+						if (before_vertex | after_vertex) {
+							if (before_vertex) prev_size += last_count * prop_size;
+						} else {
+							if (parts.Length > 2) {
+								string mapped_name;
+								if (channel_name_map.TryGetValue(parts[2], out mapped_name)) {
+									channel_infos.Add(new ChannelInfo(mapped_name, prop_offset, dtype));
+								}
 							}
+							if (data_mode == DataMode.Text) prop_size = 1;
+							prop_offset += prop_size;
 						}
-						if (data_mode == DataMode.Text) prop_size = 1;
-						prop_offset += prop_size;
 					}
+				} else if (parts[0] == "end_header") {
+					break;
 				}
-			} else if (parts[0] == "end_header") {
-				break;
-			}
-		}
-		if (data_mode == DataMode.Text) {
-			i_start = prev_count;
-			i_end = i_start + vertex_count;
-			i_delta = 1;
-		} else {
-			i_start = prev_size;
-			i_end = i_start + vertex_count * prop_offset;
-			i_delta = prop_offset;
-		}
-	}
-
-	static void ReadHeaderPCD(LineReader ts, List<ChannelInfo> channel_infos, ref DataMode data_mode, ref int width, ref int height, ref int i_delta) {
-		width = height = 1; i_delta = 0;
-		var names = new List<string>();
-		var sizes = new List<int>();
-		var types = new List<string>();
-		var counts = new List<int>();
-		while (!ts.EndOfStream) {
-			var parts = NextRow(ts);
-			if (parts.Length == 0) break;
-			if (parts[0] == "fields") {
-				for (int i = 1; i < parts.Length; i++) {
-					if (i > names.Count) {
-						names.Add(""); sizes.Add(0); types.Add(""); counts.Add(0);
-					}
-					names[i-1] = parts[i];
-				}
-			} else if (parts[0] == "size") {
-				for (int i = 1; i < parts.Length; i++) {
-					if (i > names.Count) {
-						names.Add(""); sizes.Add(0); types.Add(""); counts.Add(0);
-					}
-					sizes[i-1] = ParseInt(parts[i]);
-				}
-			} else if (parts[0] == "type") {
-				for (int i = 1; i < parts.Length; i++) {
-					if (i > names.Count) {
-						names.Add(""); sizes.Add(0); types.Add(""); counts.Add(0);
-					}
-					types[i-1] = parts[i];
-				}
-			} else if (parts[0] == "count") {
-				for (int i = 1; i < parts.Length; i++) {
-					if (i > names.Count) {
-						names.Add(""); sizes.Add(0); types.Add(""); counts.Add(0);
-					}
-					counts[i-1] = ParseInt(parts[i]);
-				}
-			} else if (parts[0] == "width") {
-				if (parts.Length > 1) width = ParseInt(parts[1]);
-			} else if (parts[0] == "height") {
-				if (parts.Length > 1) height = ParseInt(parts[1]);
-			} else if (parts[0] == "data") {
-				if (parts.Length > 1) {
-					if (parts[1] == "binary") {
-						data_mode = DataMode.LittleEndian;
-					} else if (parts[1] == "binary_compressed") {
-						data_mode = DataMode.LittleEndian | DataMode.Compressed;
-					} else {
-						data_mode = DataMode.Text;
-					}
-				}
-				break;
-			}
-		}
-		for (int i = 0; i < names.Count; i++) {
-			DataType dtype = DataType.F4;
-			try {
-				dtype = (DataType)System.Enum.Parse(typeof(DataType), types[i]+sizes[i], true);
-			} catch (System.ArgumentException exc) {
-			}
-			string mapped_name;
-			if (channel_name_map.TryGetValue(names[i], out mapped_name)) {
-				channel_infos.Add(new ChannelInfo(mapped_name, i_delta, dtype));
 			}
 			if (data_mode == DataMode.Text) {
-				i_delta += counts[i];
+				i_start = prev_count;
+				i_end = i_start + vertex_count;
+				i_delta = 1;
 			} else {
-				i_delta += sizes[i]*counts[i];
+				i_start = prev_size;
+				i_end = i_start + vertex_count * prop_offset;
+				i_delta = prop_offset;
+			}
+		}
+
+		void ReadHeaderPCD() {
+			width = height = 1; i_delta = 0;
+			var names = new List<string>();
+			var sizes = new List<int>();
+			var types = new List<string>();
+			var counts = new List<int>();
+			while (!ts.EndOfStream) {
+				var parts = NextRow(ts);
+				if (parts.Length == 0) break;
+				if (parts[0] == "fields") {
+					for (int i = 1; i < parts.Length; i++) {
+						if (i > names.Count) {
+							names.Add(""); sizes.Add(0); types.Add(""); counts.Add(0);
+						}
+						names[i-1] = parts[i];
+					}
+				} else if (parts[0] == "size") {
+					for (int i = 1; i < parts.Length; i++) {
+						if (i > names.Count) {
+							names.Add(""); sizes.Add(0); types.Add(""); counts.Add(0);
+						}
+						sizes[i-1] = ParseInt(parts[i]);
+					}
+				} else if (parts[0] == "type") {
+					for (int i = 1; i < parts.Length; i++) {
+						if (i > names.Count) {
+							names.Add(""); sizes.Add(0); types.Add(""); counts.Add(0);
+						}
+						types[i-1] = parts[i];
+					}
+				} else if (parts[0] == "count") {
+					for (int i = 1; i < parts.Length; i++) {
+						if (i > names.Count) {
+							names.Add(""); sizes.Add(0); types.Add(""); counts.Add(0);
+						}
+						counts[i-1] = ParseInt(parts[i]);
+					}
+				} else if (parts[0] == "width") {
+					if (parts.Length > 1) width = ParseInt(parts[1]);
+				} else if (parts[0] == "height") {
+					if (parts.Length > 1) height = ParseInt(parts[1]);
+				} else if (parts[0] == "data") {
+					if (parts.Length > 1) {
+						if (parts[1] == "binary") {
+							data_mode = DataMode.LittleEndian;
+						} else if (parts[1] == "binary_compressed") {
+							data_mode = DataMode.LittleEndian | DataMode.Compressed;
+						} else {
+							data_mode = DataMode.Text;
+						}
+					}
+					break;
+				}
+			}
+			for (int i = 0; i < names.Count; i++) {
+				DataType dtype = DataType.F4;
+				try {
+					dtype = (DataType)System.Enum.Parse(typeof(DataType), types[i]+sizes[i], true);
+				} catch (System.ArgumentException exc) {
+				}
+				string mapped_name;
+				if (channel_name_map.TryGetValue(names[i], out mapped_name)) {
+					channel_infos.Add(new ChannelInfo(mapped_name, i_delta, dtype));
+				}
+				if (data_mode == DataMode.Text) {
+					i_delta += counts[i];
+				} else {
+					i_delta += sizes[i]*counts[i];
+				}
+			}
+		}
+
+		void ReadHeaderASCII() {
+			var parts = NextRow(ts);
+			bool is_header = false;
+			for (int i = 0; i < parts.Length; i++) {
+				if (!IsNumber(parts[i])) { is_header = true; break; }
+			}
+			if (!is_header) {
+				ts.BaseStream.Position = 0;
+				channel_infos.Add(new ChannelInfo("x", 0));
+				channel_infos.Add(new ChannelInfo("y", 1));
+				channel_infos.Add(new ChannelInfo("z", 2));
+				channel_infos.Add(new ChannelInfo("r", 3));
+				channel_infos.Add(new ChannelInfo("g", 4));
+				channel_infos.Add(new ChannelInfo("b", 5));
+				channel_infos.Add(new ChannelInfo("nx", 6));
+				channel_infos.Add(new ChannelInfo("ny", 7));
+				channel_infos.Add(new ChannelInfo("nz", 8));
+			} else {
+				for (int i = 0; i < parts.Length; i++) {
+					string name = parts[i].ToLowerInvariant();
+					string mapped_name;
+					if (channel_name_map.TryGetValue(name, out mapped_name)) {
+						channel_infos.Add(new ChannelInfo(mapped_name, i));
+					}
+				}
 			}
 		}
 	}
 
-	static void ReadHeaderASCII(LineReader ts, List<ChannelInfo> channel_infos) {
-		var parts = NextRow(ts);
-		bool is_header = false;
-		for (int i = 0; i < parts.Length; i++) {
-			if (!IsNumber(parts[i])) { is_header = true; break; }
-		}
-		if (!is_header) {
-			ts.BaseStream.Position = 0;
-			channel_infos.Add(new ChannelInfo("x", 0));
-			channel_infos.Add(new ChannelInfo("y", 1));
-			channel_infos.Add(new ChannelInfo("z", 2));
-			channel_infos.Add(new ChannelInfo("r", 3));
-			channel_infos.Add(new ChannelInfo("g", 4));
-			channel_infos.Add(new ChannelInfo("b", 5));
-			channel_infos.Add(new ChannelInfo("nx", 6));
-			channel_infos.Add(new ChannelInfo("ny", 7));
-			channel_infos.Add(new ChannelInfo("nz", 8));
-		} else {
-			for (int i = 0; i < parts.Length; i++) {
-				string name = parts[i].ToLowerInvariant();
-				string mapped_name;
-				if (channel_name_map.TryGetValue(name, out mapped_name)) {
-					channel_infos.Add(new ChannelInfo(mapped_name, i));
+	public class Writer : System.IDisposable {
+		Stream stream;
+		StreamWriter ts;
+		BinaryWriter bs;
+		DataMode data_mode = DataMode.Text;
+
+		List<long> vcpos;
+		string vcspace = "          "; // 10 chars is enough for int.MaxValue
+		int vcount = 0;
+
+		string[] fields = new string[]{"x","y","z","r","g","b","nx","ny","nz"};
+		string sep = " ";
+
+		public Writer(string path, bool binary=false, bool compressed=false) {
+			string ext = Path.GetExtension(path).ToLowerInvariant();
+
+			vcpos = new List<long>();
+
+			stream = new FileStream(path, FileMode.Create, FileAccess.Write);
+			ts = new StreamWriter(stream, Encoding.ASCII);
+			ts.NewLine = "\n"; // ~better compatibility?
+
+			if (ext == ".ply") {
+				if (binary) data_mode = DataMode.LittleEndian;
+				string format = (binary ? "binary_little_endian" : "ascii");
+				ts.WriteLine("ply");
+				ts.WriteLine("format "+format+" 1.0");
+				ts.Write("element vertex "); WriteVSpace();
+				ts.WriteLine("property float x");
+				ts.WriteLine("property float y");
+				ts.WriteLine("property float z");
+				ts.WriteLine("property uchar r");
+				ts.WriteLine("property uchar g");
+				ts.WriteLine("property uchar b");
+				ts.WriteLine("property float nx");
+				ts.WriteLine("property float ny");
+				ts.WriteLine("property float nz");
+				ts.WriteLine("end_header");
+			} else if (ext == ".pcd") {
+				if (binary) data_mode = DataMode.LittleEndian;
+				if (binary & compressed) data_mode |= DataMode.Compressed;
+				string format = (binary ? (compressed ? "binary_compressed" : "binary") : "ascii");
+				ts.WriteLine("VERSION .7");
+				ts.WriteLine("FIELDS x y z r g b nx ny nz");
+				ts.WriteLine("SIZE 4 4 4 1 1 1 4 4 4");
+				ts.WriteLine("TYPE F F F U U U F F F");
+				ts.WriteLine("COUNT 1 1 1 1 1 1 1 1 1");
+				ts.Write("WIDTH "); WriteVSpace();
+				ts.WriteLine("HEIGHT 1");
+				ts.WriteLine("VIEWPOINT 0 0 0 1 0 0 0");
+				ts.Write("POINTS "); WriteVSpace();
+				ts.WriteLine("DATA "+format);
+			} else {
+				if (ext == ".csv") sep = ",";
+				ts.WriteLine(string.Join(sep, fields));
+			}
+			ts.Flush(); // for the case when the data is binary
+
+			if (data_mode != DataMode.Text) {
+				if ((data_mode & DataMode.Compressed) == DataMode.Compressed) {
+					bs = new BinaryWriter(new MemoryStream());
+				} else {
+					bs = new BinaryWriter(stream);
 				}
 			}
+		}
+
+		public void Dispose() {
+			if (stream == null) return;
+			if (data_mode == DataMode.Text) {
+				ts.Flush();
+			} else {
+				bs.Flush();
+				if ((data_mode & DataMode.Compressed) == DataMode.Compressed) {
+					var uncompressed_bytes = ((MemoryStream)bs.BaseStream).ToArray();
+					var compressed_bytes = CLZF2.Compress(uncompressed_bytes);
+					bs = new BinaryWriter(stream);
+					bs.Write((uint)compressed_bytes.Length);
+					bs.Write((uint)uncompressed_bytes.Length);
+					bs.Write(compressed_bytes);
+					bs.Flush();
+				}
+			}
+			for (int i = 0; i < vcpos.Count; i++) {
+				stream.Position = vcpos[i];
+				ts = new StreamWriter(stream, Encoding.ASCII);
+				ts.Write(vcount);
+				ts.Flush();
+			}
+			stream.Flush();
+			stream.Close();
+			stream.Dispose();
+			stream = null;
+		}
+
+		public void Flush() {
+			if (stream == null) return;
+			stream.Flush();
+		}
+
+		void WriteVSpace() {
+			ts.Flush();
+			vcpos.Add(stream.Position);
+			ts.WriteLine(vcspace);
+		}
+
+		public void Write(Vector3 p, Color32 c, Vector3 n) {
+			if (data_mode == DataMode.Text) {
+				ts.WriteLine(p.x+sep+p.y+sep+p.z+sep+c.r+sep+c.g+sep+c.b+sep+n.x+sep+n.y+sep+n.z);
+			} else {
+				bs.Write(p.x); bs.Write(p.y); bs.Write(p.z);
+				bs.Write(c.r); bs.Write(c.g); bs.Write(c.b);
+				bs.Write(n.x); bs.Write(n.y); bs.Write(n.z);
+			}
+			vcount++;
 		}
 	}
 

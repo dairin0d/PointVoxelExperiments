@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-Shader "Unlit/PointCloudShader" {
+Shader "Voxel/PointCloudShader" {
 	Properties {
 	}
 	SubShader {

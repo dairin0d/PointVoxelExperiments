@@ -36,24 +36,27 @@ public class PointCloudTest : MonoBehaviour {
 		var normals = new List<Vector3>();
 		Bounds bounds = new Bounds();
 		int full_count = 0;
-		PointCloudFile.Read(path, (pos,  color, normal) => {
-			full_count++;
-			if (float.IsNaN(pos.x)|float.IsNaN(pos.y)|float.IsNaN(pos.y)) {
-				Debug.Log(vertices.Count+" is NaN");
-				return;
+		using (var pcr = new PointCloudFile.Reader(path)) {
+			Vector3 pos; Color32 color; Vector3 normal;
+			while (pcr.Read(out pos, out color, out normal)) {
+				full_count++;
+				if (float.IsNaN(pos.x)|float.IsNaN(pos.y)|float.IsNaN(pos.y)) {
+					Debug.Log(vertices.Count+" is NaN");
+					continue;
+				}
+				if (float.IsInfinity(pos.x)|float.IsInfinity(pos.y)|float.IsInfinity(pos.y)) {
+					Debug.Log(vertices.Count+" is inf");
+					continue;
+				}
+				if (Random.value > viz_amount) return;
+				vertices.Add(pos*scale); colors.Add(color); normals.Add(normal);
+				if (vertices.Count == 1) {
+					bounds = new Bounds(vertices[0], Vector3.zero);
+				} else {
+					bounds.Encapsulate(vertices[vertices.Count-1]);
+				}
 			}
-			if (float.IsInfinity(pos.x)|float.IsInfinity(pos.y)|float.IsInfinity(pos.y)) {
-				Debug.Log(vertices.Count+" is inf");
-				return;
-			}
-			if (Random.value > viz_amount) return;
-			vertices.Add(pos*scale); colors.Add(color); normals.Add(normal);
-			if (vertices.Count == 1) {
-				bounds = new Bounds(vertices[0], Vector3.zero);
-			} else {
-				bounds.Encapsulate(vertices[vertices.Count-1]);
-			}
-		});
+		}
 		Debug.Log("Read "+path+" : "+full_count+" -> "+vertices.Count);
 
 		if (autoscale) {
@@ -69,6 +72,7 @@ public class PointCloudTest : MonoBehaviour {
 		}
 
 		var mesh = new Mesh();
+		mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
 		mesh.SetVertices(vertices);
 		mesh.SetColors(colors);
 		mesh.SetNormals(normals);
