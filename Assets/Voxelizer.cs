@@ -12,19 +12,21 @@ Pros:
 	possibly better geometric quality (less oversampling)
 	textures don't need to be set as readable
 Cons:
-	doesn't work due to ReadPixels/GetColors32 bug
 	tiny/thin elements might not get rasterized
 	likely slower than direct polygon sampling
 */
 
 [ExecuteInEditMode]
 public class Voxelizer : MonoBehaviour {
+	#region Public properties
 	public string savePath = "";
 
 	public Vector3 size = Vector3.one;
 	public float numerator = 1;
 	public float denominator = 64;
 	public bool relative = true;
+	[Range(0, 1)]
+	public float alphaThreshold = 0.95f;
 
 	public bool handles1D = true;
 	public bool handles2D = false;
@@ -59,9 +61,9 @@ public class Voxelizer : MonoBehaviour {
 	public Bounds actualBounds {
 		get { return new Bounds(Vector3.zero, actualSize); }
 	}
+	#endregion
 
-	public string debugStr = "";
-
+	#region Slice processing
 	// Harware may support bigger sizes, but we need it to be
 	// small enough for interactive progress updates
 	static int maxTexSize = 1024;
@@ -82,28 +84,22 @@ public class Voxelizer : MonoBehaviour {
 			return 2*(grid_size.x*sn.y*sn.z + grid_size.y*sn.x*sn.z + grid_size.z*sn.x*sn.y);
 		}
 	}
-	public int sliceIndex = -1;
 
-	Camera cam;
-	public void SetupCamera() {
-		if (sliceIndex < 0) {
-			debugStr = (sliceIndex+"/"+slicesCount+" : OFF");
-			//if (cam) { ContextualDestroy(cam.gameObject); cam = null; }
-			if (cam) cam.gameObject.SetActive(false);
-			return;
-		}
+	struct SliceInfo {
+		public Vector3 position;
+		public Quaternion rotation;
+		public Vector3 globalSize;
+		public Vector2Int sliceSize;
+		public Vector2Int pieceSize;
+		public Vector3Int piecePos0;
+		public Vector3Int pieceDirX;
+		public Vector3Int pieceDirY;
+		public Vector3Int pieceDirZ;
+	}
 
-		if (!cam) {
-			cam = GetComponentInChildren<Camera>(true);
-			if (!cam) cam = (new GameObject("VoxelizerCamera")).AddComponent<Camera>();
-		}
-
-		var cam_tfm = cam.transform;
-		cam_tfm.SetParent(transform, false);
-		cam.orthographic = true;
-		cam.cullingMask = (projector ? ~projector.ignoreLayers : -1);
-		cam.clearFlags = CameraClearFlags.SolidColor;
-		cam.backgroundColor = Color.clear;
+	bool CalcSlice(int slice_index, out SliceInfo slice_info) {
+		slice_info = default(SliceInfo);
+		if (slice_index < 0) return false;
 
 		var grid_size = gridSize;
 		var sn = slicesXYZ;
@@ -117,12 +113,12 @@ public class Voxelizer : MonoBehaviour {
 		int y_end = x_end + 2*ny;
 		int z_end = y_end + 2*nz;
 
-		int slice_id = sliceIndex;
+		int slice_id = slice_index;
 		int sign = 1;
 		// Note: camera always looks in +Z direction
-		var dirX = Vector3.right;
-		var dirY = Vector3.up;
-		var dirZ = Vector3.forward;
+		var idirX = default(Vector3Int);
+		var idirY = default(Vector3Int);
+		var idirZ = default(Vector3Int);
 		int piece_z = 0, slice_d = 0;
 		int piece_x = 0, piece_y = 0;
 		int slice_w = 0, slice_h = 0;
@@ -136,10 +132,9 @@ public class Voxelizer : MonoBehaviour {
 			slice_w = grid_size.z; slice_h = grid_size.y;
 			piece_w = Mathf.CeilToInt(slice_w / (float)sn.z);
 			piece_h = Mathf.CeilToInt(slice_h / (float)sn.y);
-			dirX = new Vector3(0, 0, -sign);
-			dirY = new Vector3(0, 1, 0);
-			dirZ = new Vector3(sign, 0, 0);
-			debugStr = (sliceIndex+"/"+slicesCount+" = "+sign+"*X: "+piece_z+", "+piece_x+", "+piece_y);
+			idirX = new Vector3Int(0, 0, -sign);
+			idirY = new Vector3Int(0, 1, 0);
+			idirZ = new Vector3Int(sign, 0, 0);
 		} else if (slice_id < y_end) {
 			slice_id -= x_end;
 			if (slice_id >= ny) { slice_id -= ny; sign = -1; }
@@ -150,10 +145,9 @@ public class Voxelizer : MonoBehaviour {
 			slice_w = grid_size.x; slice_h = grid_size.z;
 			piece_w = Mathf.CeilToInt(slice_w / (float)sn.x);
 			piece_h = Mathf.CeilToInt(slice_h / (float)sn.z);
-			dirX = new Vector3(1, 0, 0);
-			dirY = new Vector3(0, 0, -sign);
-			dirZ = new Vector3(0, sign, 0);
-			debugStr = (sliceIndex+"/"+slicesCount+" = "+sign+"*Y: "+piece_z+", "+piece_x+", "+piece_y);
+			idirX = new Vector3Int(1, 0, 0);
+			idirY = new Vector3Int(0, 0, -sign);
+			idirZ = new Vector3Int(0, sign, 0);
 		} else if (slice_id < z_end) {
 			slice_id -= y_end;
 			if (slice_id >= nz) { slice_id -= nz; sign = -1; }
@@ -164,24 +158,17 @@ public class Voxelizer : MonoBehaviour {
 			slice_w = grid_size.x; slice_h = grid_size.y;
 			piece_w = Mathf.CeilToInt(slice_w / (float)sn.x);
 			piece_h = Mathf.CeilToInt(slice_h / (float)sn.y);
-			dirX = new Vector3(0, 0, sign);
-			dirY = new Vector3(0, 1, 0);
-			dirZ = new Vector3(0, 0, sign);
-			debugStr = (sliceIndex+"/"+slicesCount+" = "+sign+"*Z: "+piece_z+", "+piece_x+", "+piece_y);
+			idirX = new Vector3Int(sign, 0, 0);
+			idirY = new Vector3Int(0, 1, 0);
+			idirZ = new Vector3Int(0, 0, sign);
 		} else {
-			cam.gameObject.SetActive(false);
-			debugStr = (sliceIndex+"/"+slicesCount+" : FINISHED");
-			return;
+			return false;
 		}
 
 		piece_x *= piece_w; piece_w = Mathf.Min(piece_w, slice_w - piece_x);
 		piece_y *= piece_h; piece_h = Mathf.Min(piece_h, slice_h - piece_y);
 
-		pieceW = piece_w; pieceH = piece_h;
-		pieceDirX = Vector3RoundToInt(dirX);
-		pieceDirY = Vector3RoundToInt(dirY);
-		piecePos0 = new Vector3Int(piece_x, piece_y, piece_z);
-
+		Vector3 dirX = idirX, dirY = idirY, dirZ = idirZ;
 		var position = new Vector3(piece_x - (slice_w-piece_w)*0.5f, piece_y - (slice_h-piece_h)*0.5f, piece_z+0.5f - slice_d*0.5f);
 		position = (dirX * position.x + dirY * position.y + dirZ * position.z) * pixelSize;
 		var rotation = Quaternion.LookRotation(dirZ, dirY);
@@ -189,87 +176,128 @@ public class Voxelizer : MonoBehaviour {
 		dirX = transform.TransformVector(dirX);
 		dirY = transform.TransformVector(dirY);
 		dirZ = transform.TransformVector(dirZ);
-
 		var dirScaled = new Vector3(dirX.magnitude, dirY.magnitude, dirZ.magnitude);
-		var global_size = Vector3.Scale(dirScaled, new Vector3(piece_w, piece_h, 1)*pixelSize);
+		var globalSize = Vector3.Scale(dirScaled, new Vector3(piece_w, piece_h, 1)*pixelSize);
 
-		cam.gameObject.SetActive(true);
-		cam_tfm.localRotation = rotation;
-		cam_tfm.localPosition = position;
-		cam.orthographicSize = global_size.y * 0.5f;
-		cam.aspect = global_size.x / global_size.y;
-		cam.nearClipPlane = -global_size.z*0.5f;
-		cam.farClipPlane = global_size.z*0.5f;
+		slice_info.position = position;
+		slice_info.rotation = rotation;
+		slice_info.globalSize = globalSize;
+		slice_info.sliceSize = new Vector2Int(slice_w, slice_h);
+		slice_info.pieceSize = new Vector2Int(piece_w, piece_h);
+		slice_info.piecePos0 = idirX*piece_x + idirY*piece_y + idirZ*piece_z;
+		slice_info.pieceDirX = idirX;
+		slice_info.pieceDirY = idirY;
+		slice_info.pieceDirZ = idirZ;
+
+		var axes = idirX + idirY + idirZ;
+		if (axes.x < 0) slice_info.piecePos0.x += grid_size.x;
+		if (axes.y < 0) slice_info.piecePos0.y += grid_size.y;
+		if (axes.z < 0) slice_info.piecePos0.z += grid_size.z;
+
+		return true;
 	}
 
-	Vector3Int piecePos0, pieceDirX, pieceDirY;
-	int pieceW, pieceH;
-	static Vector3Int Vector3RoundToInt(Vector3 v) {
-		return new Vector3Int(Mathf.RoundToInt(v.x), Mathf.RoundToInt(v.y), Mathf.RoundToInt(v.z));
-	}
-
+	Camera cam;
 	Texture2D tex2D;
-	void RenderPiece() {
-		if (!voxelize) {
-			if (tex2D) {
-				Destroy(tex2D);
-				tex2D = null;
-			}
-			return;
-		}
-		if (tex2D) Destroy(tex2D);
-		//var tex2D = new Texture2D(pieceW, pieceH, TextureFormat.ARGB32, false);
-		tex2D = new Texture2D(pieceW, pieceH, TextureFormat.ARGB32, false);
-		var rt_prev = RenderTexture.active;
-		//var rt = new RenderTexture(pieceW, pieceH, 24, RenderTextureFormat.ARGB32);
-		var rt = RenderTexture.GetTemporary(pieceW, pieceH, 24, RenderTextureFormat.ARGB32);
-		rt.filterMode = FilterMode.Point;
-//		rt.antiAliasing = 1;
-//		rt.autoGenerateMips = false;
-//		rt.useMipMap = false;
-//		rt.useDynamicScale = false;
-		var pixels0 = new Color32[pieceW*pieceH];
-		pixels0[0] = Color.white;
-		RenderTexture.active = rt;
-		//cam.targetTexture = rt;
-		cam.pixelRect = new Rect(0, 0, pieceW, pieceH);
-		cam.Render();
-		tex2D.ReadPixels(cam.pixelRect, 0, 0, false);
-		tex2D.Apply(false, false);
-//		tex2D.SetPixels32(pixels0);
-//		tex2D.Apply(false, false);
-		//cam.targetTexture = null;
-		//RenderTexture.active = rt_prev;
-		RenderTexture.active = null;
-		RenderTexture.ReleaseTemporary(rt);
-//		rt.Release();
-//		Destroy(rt);
-		//Destroy(tex2D);
-		var pixels = tex2D.GetPixels32();
-		int opaque_cnt = 0;
-		for (int i = 0; i < pixels.Length; i++) {
-			var c = pixels[i];
-			opaque_cnt += c.a;
-		}
-		Debug.Log("Slice Index "+sliceIndex+" : "+opaque_cnt);
-		var bytes = tex2D.EncodeToPNG();
-		Debug.Log("PNG size "+bytes.Length);
-	}
-
-	void OnGUI() {
-		if (tex2D) {
-			GUI.DrawTexture(new Rect(0, 0, tex2D.width, tex2D.height), tex2D);
-		}
-	}
-
-	static void ContextualDestroy(UnityEngine.Object obj) {
+	public void Cleanup() {
 		if (Application.isPlaying) {
-			UnityEngine.Object.Destroy(obj);
+			if (cam) Destroy(cam.gameObject);
+			if (tex2D) Destroy(tex2D);
 		} else {
-			UnityEngine.Object.DestroyImmediate(obj);
+			if (cam) DestroyImmediate(cam.gameObject);
+			if (tex2D) DestroyImmediate(tex2D);
 		}
+		cam = null; tex2D = null;
 	}
 
+	public void RenderSlice(int slice_index, System.Action<Vector3Int, Color32, Vector3Int> callback) {
+		SliceInfo slice_info;
+		if (!CalcSlice(slice_index, out slice_info)) { Cleanup(); return; }
+
+		int w = slice_info.pieceSize.x, h = slice_info.pieceSize.y;
+
+		if (!cam) {
+			cam = GetComponentInChildren<Camera>(true);
+			if (!cam) cam = (new GameObject("VoxelizerCamera")).AddComponent<Camera>();
+		}
+
+		if (!tex2D) {
+			tex2D = new Texture2D(w, h, TextureFormat.ARGB32, false);
+		} else if ((tex2D.width != w) | (tex2D.height != h)) {
+			tex2D.Resize(w, h, TextureFormat.ARGB32, false);
+		}
+
+		SetupCamera(ref slice_info);
+
+		byte alpha_threshold = (byte)(Mathf.Clamp01(alphaThreshold)*255f);
+		if (alpha_threshold < 1) alpha_threshold = 1;
+
+		int aa_prev = QualitySettings.antiAliasing;
+		QualitySettings.antiAliasing = 0;
+
+		bool proj_enabled = (projector && projector.enabled);
+		if (projector) projector.enabled = false;
+		RenderToTexture2D(cam, tex2D);
+		if (projector) projector.enabled = proj_enabled;
+
+		QualitySettings.antiAliasing = aa_prev;
+
+		var pixels = tex2D.GetPixels32();
+		for (int y = 0; y < h; y++) {
+			for (int x = 0; x < w; x++) {
+				var c = pixels[x+y*w];
+				if (c.a < alpha_threshold) continue;
+				c.a = 255;
+				var p = slice_info.piecePos0 + slice_info.pieceDirX*x + slice_info.pieceDirY*y;
+				var n = slice_info.pieceDirZ * -1; // no negation operator in Unity 2017.3
+				callback(p, c, n);
+			}
+		}
+	}
+	void SetupCamera(ref SliceInfo slice_info) {
+		var cam_tfm = cam.transform;
+		cam_tfm.SetParent(transform, false);
+		cam.orthographic = true;
+		cam.cullingMask = (projector ? ~projector.ignoreLayers : -1);
+		cam.clearFlags = CameraClearFlags.SolidColor;
+		cam.backgroundColor = Color.clear;
+		// Exclude from regular rendering (does not affect manual Render() calls)
+		cam.enabled = false;
+		cam.gameObject.SetActive(true);
+
+		float overlap = 1.05f;
+
+		cam_tfm.localRotation = slice_info.rotation;
+		cam_tfm.localPosition = slice_info.position;
+		cam.orthographicSize = slice_info.globalSize.y * 0.5f;
+		cam.aspect = slice_info.globalSize.x / slice_info.globalSize.y;
+		cam.nearClipPlane = -slice_info.globalSize.z*0.5f*overlap;
+		cam.farClipPlane = slice_info.globalSize.z*0.5f*overlap;
+	}
+
+	// Assumptions: tex2D is in TextureFormat.ARGB32 format & has no mipmaps, cam.rect is (0, 0, 1, 1).
+	static void RenderToTexture2D(Camera cam, Texture2D tex2D) {
+		var rt = RenderTexture.GetTemporary(tex2D.width, tex2D.height, 24, RenderTextureFormat.ARGB32);
+
+		// This step doesn't care about RenderTexture.active
+		// https://docs.unity3d.com/ScriptReference/Camera.Render.html
+		cam.targetTexture = rt; // redirect camera's output to our rendertexture
+		cam.Render(); // actually render camera to its target
+		cam.targetTexture = null; // not absolutely necessary here, but it's a good practice
+
+		// This step doesn't care about cam.targetTexture
+		// https://docs.unity3d.com/ScriptReference/RenderTexture-active.html
+		var prev_rt = RenderTexture.active;
+		RenderTexture.active = rt; // now ReadPixels() will grab from rt (instead of e.g. backbuffer)
+		tex2D.ReadPixels(new Rect(0, 0, tex2D.width, tex2D.height), 0, 0, false); // grab rendertexture's contents
+		tex2D.Apply(false, false); // our texture won't actually be updated until Apply()
+		RenderTexture.active = prev_rt; // restore initial renderbuffer
+
+		RenderTexture.ReleaseTemporary(rt);
+	}
+	#endregion
+
+	#region Projector setup
 	Projector projector;
 	Material proj_mat;
 	void SetupProjector() {
@@ -297,70 +325,14 @@ public class Voxelizer : MonoBehaviour {
 		_PixelScale.z = grid_size.z;
 		proj_mat.SetVector("_PixelScale", _PixelScale);
 	}
-
-	public bool voxelize = false;
-	ProgressInfo progressInfo = null;
-	void UpdateSliceIndex() {
-		if (!Application.isPlaying) return;
-		if (progressInfo != null) {
-			voxelize &= (progressInfo.sliceIndex < slicesCount);
-		}
-		if (!voxelize) {
-			if (progressInfo != null) {
-				progressInfo.Dispose();
-				progressInfo = null;
-			}
-			sliceIndex = -1;
-			Time.timeScale = 1;
-			return;
-		}
-		if (progressInfo == null) {
-			progressInfo = new ProgressInfo();
-			progressInfo.size = size;
-			progressInfo.numerator = numerator;
-			progressInfo.denominator = denominator;
-			progressInfo.relative = relative;
-			progressInfo.sliceIndex = 0;
-			Time.timeScale = 0;
-		}
-		size = progressInfo.size;
-		numerator = progressInfo.numerator;
-		denominator = progressInfo.denominator;
-		relative = progressInfo.relative;
-		sliceIndex = progressInfo.sliceIndex;
-		progressInfo.sliceIndex++;
-	}
+	#endregion
 
 	void OnDestroy() {
-		if (!Application.isPlaying) return;
-		if (progressInfo != null) {
-			progressInfo.Dispose();
-			progressInfo = null;
-		}
-	}
-
-	class ProgressInfo {
-		public Vector3 size = Vector3.one;
-		public float numerator = 1;
-		public float denominator = 64;
-		public bool relative = true;
-		public int sliceIndex = 0;
-		public void Dispose() {
-			// close file, destroy texture, etc.
-		}
+		Cleanup();
 	}
 
 	void Update() {
 		SetupProjector();
-//		UpdateSliceIndex();
-//		SetupCamera();
-	}
-
-	void LateUpdate() {
-		if (!Application.isPlaying) return;
-		UpdateSliceIndex();
-		SetupCamera();
-		RenderPiece();
 	}
 
 	void OnDrawGizmos() {
@@ -373,6 +345,7 @@ public class Voxelizer : MonoBehaviour {
 		Gizmos.matrix = m;
 	}
 
+	#region Add Voxelizer
 	public static Voxelizer AddVoxelizer(Transform tfm) {
 		if (!tfm) tfm = null;
 		var bounds = CalcBounds(tfm);
@@ -387,7 +360,6 @@ public class Voxelizer : MonoBehaviour {
 		voxelizer.size = bounds.size * 1.0001f;
 		return voxelizer;
 	}
-
 	static Bounds CalcBounds(Transform tfm) {
 		Bounds bounds = default(Bounds); int count = 0;
 		UpdateBounds(tfm, tfm.worldToLocalMatrix, ref bounds, ref count);
@@ -429,6 +401,7 @@ public class Voxelizer : MonoBehaviour {
 		}
 		return null;
 	}
+	#endregion
 }
 
 #if UNITY_EDITOR

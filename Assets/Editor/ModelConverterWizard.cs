@@ -100,12 +100,17 @@ public class ModelConverterWizard : EditorWindow {
 
 		EditorGUIUtility.labelWidth = labelWidth;
 
+		Transform active_tfm = Selection.activeTransform;
+		Voxelizer voxelizer = (active_tfm ? active_tfm.GetComponent<Voxelizer>() : null);
+
 		if (string.IsNullOrEmpty(src_path)) {
-			GUI.enabled = (bool)Selection.activeTransform;
-			localCoords = (Transform)EditorGUILayout.ObjectField("Local coords", localCoords, typeof(Transform), true);
-			spatialResolution = EditorGUILayout.FloatField("Spatial resolution", spatialResolution);
-			includeChildren = EditorGUILayout.Toggle("Include children", includeChildren);
-			GUI.enabled = true;
+			if (!voxelizer) {
+				GUI.enabled = (bool)active_tfm;
+				localCoords = (Transform)EditorGUILayout.ObjectField("Local coords", localCoords, typeof(Transform), true);
+				spatialResolution = EditorGUILayout.FloatField("Spatial resolution", spatialResolution);
+				includeChildren = EditorGUILayout.Toggle("Include children", includeChildren);
+				GUI.enabled = true;
+			}
 		} else {
 			string ext = Path.GetExtension(src_path).ToLowerInvariant();
 			if (ext == ".ply") {
@@ -140,9 +145,13 @@ public class ModelConverterWizard : EditorWindow {
 			GUILayout.Button("Convert File");
 			GUI.enabled = true;
 		} else {
-			GUI.enabled = (bool)Selection.activeTransform;
-			if (GUILayout.Button("Convert Selection")) Convert_Selection();
-			GUI.enabled = true;
+			if (!voxelizer) {
+				GUI.enabled = (bool)active_tfm;
+				if (GUILayout.Button("Convert Selection (mesh sampling)")) Convert_Selection();
+				GUI.enabled = true;
+			} else {
+				if (GUILayout.Button("Convert Selection (render-voxelizer)")) Convert_Selection();
+			}
 		}
 	}
 
@@ -200,32 +209,20 @@ public class ModelConverterWizard : EditorWindow {
 	}
 
 	void Convert_Selection() {
-		var sel_mode = SelectionMode.Unfiltered;
-		if (includeChildren) sel_mode = SelectionMode.Deep;
-
 		if (!string.IsNullOrEmpty(dst_path)) {
 			using (var writer = new PointCloudFile.Writer(dst_path, writeBinary, writeCompressed)) {
-				foreach (var tfm in Selection.GetTransforms(sel_mode)) {
-					Convert_Selection(tfm, (p, c, n) => {
-						writer.Write(p, c, n);
-					});
-				}
+				Convert_Selection(writer.Write);
 			}
 		} else {
 			var vertices = new List<Vector3>();
 			var colors = new List<Color32>();
 			var normals = new List<Vector3>();
-
-			foreach (var tfm in Selection.GetTransforms(sel_mode)) {
-				Convert_Selection(tfm, (pos, color, normal) => {
-					vertices.Add(pos); colors.Add(color); normals.Add(normal);
-				});
-			}
+			Convert_Selection((pos, color, normal) => {
+				vertices.Add(pos); colors.Add(color); normals.Add(normal);
+			});
 
 			var indices = new int[vertices.Count];
-			for (int i = 0; i < indices.Length; i++) {
-				indices[i] = i;
-			}
+			for (int i = 0; i < indices.Length; i++) { indices[i] = i; }
 
 			var mesh = new Mesh();
 			mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
@@ -240,16 +237,59 @@ public class ModelConverterWizard : EditorWindow {
 			var mesh_renderer = gameObject.AddComponent<MeshRenderer>();
 			mesh_renderer.sharedMaterial = new Material(Shader.Find("Voxel/PointCloudShader"));
 
-			if (localCoords != null) {
+			Transform active_tfm = Selection.activeTransform;
+			Voxelizer voxelizer = (active_tfm ? active_tfm.GetComponent<Voxelizer>() : null);
+
+			var _localCoords = localCoords;
+			if (voxelizer) _localCoords = active_tfm;
+
+			if (_localCoords) {
 				var tfm = gameObject.transform;
-				tfm.SetParent(localCoords.parent);
-				tfm.localPosition = localCoords.localPosition;
-				tfm.localRotation = localCoords.localRotation;
-				tfm.localScale = localCoords.localScale;
+				tfm.SetParent(_localCoords.parent);
+				tfm.localPosition = _localCoords.localPosition;
+				tfm.localRotation = _localCoords.localRotation;
+				tfm.localScale = _localCoords.localScale;
 			}
 		}
 	}
-	void Convert_Selection(Transform tfm, System.Action<Vector3, Color32, Vector3> callback) {
+
+	void Convert_Selection(System.Action<Vector3, Color32, Vector3> callback) {
+		Transform active_tfm = Selection.activeTransform;
+		Voxelizer voxelizer = (active_tfm ? active_tfm.GetComponent<Voxelizer>() : null);
+		if (voxelizer) {
+			Voxelize_Selection(voxelizer, callback);
+		} else {
+			var sel_mode = SelectionMode.Unfiltered;
+			if (includeChildren) sel_mode = SelectionMode.Deep;
+			foreach (var tfm in Selection.GetTransforms(sel_mode)) {
+				Sample_Selection(tfm, callback);
+			}
+		}
+	}
+
+	void Voxelize_Selection(Voxelizer voxelizer, System.Action<Vector3, Color32, Vector3> callback) {
+		EditorUtility.ClearProgressBar();
+		string title = "Voxelizing...", info = "";
+		EditorUtility.DisplayCancelableProgressBar(title, info, 0);
+		var grid_size = voxelizer.gridSize;
+		var bounds = voxelizer.actualBounds;
+		int slices_count = voxelizer.slicesCount;
+		for (int slice_id = 0; slice_id < slices_count; slice_id++) {
+			float progress = slice_id / (float)slices_count;
+			if (EditorUtility.DisplayCancelableProgressBar(title, info, progress)) break;
+			voxelizer.RenderSlice(slice_id, (p_i, c, n_i) => {
+				Vector3 p = p_i, n = n_i;
+				p = (p + Vector3.one*0.5f) + n * 0.125f;
+				p.x /= grid_size.x; p.y /= grid_size.y; p.z /= grid_size.z;
+				p = bounds.min + Vector3.Scale(bounds.size, p);
+				callback(p, c, n);
+			});
+		}
+		voxelizer.Cleanup();
+		EditorUtility.ClearProgressBar();
+	}
+
+	void Sample_Selection(Transform tfm, System.Action<Vector3, Color32, Vector3> callback) {
 		Mesh mesh; Material[] mats;
 		GetMeshAndMaterials(tfm, out mesh, out mats);
 		if (!mesh || (mats == null)) return;
