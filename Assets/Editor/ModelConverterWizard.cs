@@ -110,6 +110,8 @@ public class ModelConverterWizard : EditorWindow {
 				spatialResolution = EditorGUILayout.FloatField("Spatial resolution", spatialResolution);
 				includeChildren = EditorGUILayout.Toggle("Include children", includeChildren);
 				GUI.enabled = true;
+			} else {
+				localCoords = (Transform)EditorGUILayout.ObjectField("Local coords", localCoords, typeof(Transform), true);
 			}
 		} else {
 			string ext = Path.GetExtension(src_path).ToLowerInvariant();
@@ -237,18 +239,12 @@ public class ModelConverterWizard : EditorWindow {
 			var mesh_renderer = gameObject.AddComponent<MeshRenderer>();
 			mesh_renderer.sharedMaterial = new Material(Shader.Find("Voxel/PointCloudShader"));
 
-			Transform active_tfm = Selection.activeTransform;
-			Voxelizer voxelizer = (active_tfm ? active_tfm.GetComponent<Voxelizer>() : null);
-
-			var _localCoords = localCoords;
-			if (voxelizer) _localCoords = active_tfm;
-
-			if (_localCoords) {
+			if (localCoords) {
 				var tfm = gameObject.transform;
-				tfm.SetParent(_localCoords.parent);
-				tfm.localPosition = _localCoords.localPosition;
-				tfm.localRotation = _localCoords.localRotation;
-				tfm.localScale = _localCoords.localScale;
+				tfm.SetParent(localCoords.parent);
+				tfm.localPosition = localCoords.localPosition;
+				tfm.localRotation = localCoords.localRotation;
+				tfm.localScale = localCoords.localScale;
 			}
 		}
 	}
@@ -271,6 +267,9 @@ public class ModelConverterWizard : EditorWindow {
 		EditorUtility.ClearProgressBar();
 		string title = "Voxelizing...", info = "";
 		EditorUtility.DisplayCancelableProgressBar(title, info, 0);
+		var matrix = voxelizer.transform.localToWorldMatrix;
+		if (localCoords) matrix = localCoords.worldToLocalMatrix * matrix;
+		bool use_matrix = (voxelizer.transform != localCoords);
 		var grid_size = voxelizer.gridSize;
 		var bounds = voxelizer.actualBounds;
 		int slices_count = voxelizer.slicesCount;
@@ -282,6 +281,11 @@ public class ModelConverterWizard : EditorWindow {
 				p = (p + Vector3.one*0.5f) + n * 0.125f;
 				p.x /= grid_size.x; p.y /= grid_size.y; p.z /= grid_size.z;
 				p = bounds.min + Vector3.Scale(bounds.size, p);
+				if (use_matrix) {
+					var p_old = p;
+					p = matrix.MultiplyPoint3x4(p);
+					n = (matrix.MultiplyPoint3x4(p_old+n) - p).normalized;
+				}
 				callback(p, c, n);
 			});
 		}
