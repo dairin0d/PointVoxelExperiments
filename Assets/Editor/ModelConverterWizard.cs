@@ -23,6 +23,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using UnityEditor;
 using UnityEngine;
 
@@ -65,6 +66,7 @@ public class ModelConverterWizard : EditorWindow {
 	}
 
 	string src_path = "", dst_path = "";
+	string src_path_prev = null;
 
 	Transform localCoords = null;
 	float spatialResolution = 1f;
@@ -72,6 +74,17 @@ public class ModelConverterWizard : EditorWindow {
 
 	bool writeBinary = false;
 	bool writeCompressed = false;
+
+	bool discretize = false;
+	float voxelSize = -1;
+	int maxResolution = -1;
+	ColorSpaces colorSpace = ColorSpaces.GammaRGB;
+	bool floodFill = false;
+	Vector3 marginMin = Vector3.one;
+	Vector3 marginMax = Vector3.one;
+	string seedCoords = "";
+
+	bool input_file_exists = false;
 
 	void OnGUI() {
 		if (!initialized) return;
@@ -100,10 +113,15 @@ public class ModelConverterWizard : EditorWindow {
 
 		EditorGUIUtility.labelWidth = labelWidth;
 
+		EditorGUILayout.Separator();
+
 		Transform active_tfm = Selection.activeTransform;
 		Voxelizer voxelizer = (active_tfm ? active_tfm.GetComponent<Voxelizer>() : null);
 
-		if (string.IsNullOrEmpty(src_path)) {
+		bool input_path_empty = string.IsNullOrEmpty(src_path);
+		bool known_format_input = true;
+		if (input_path_empty) {
+			known_format_input = false;
 			if (!voxelizer) {
 				GUI.enabled = (bool)active_tfm;
 				localCoords = (Transform)EditorGUILayout.ObjectField("Local coords", localCoords, typeof(Transform), true);
@@ -113,6 +131,7 @@ public class ModelConverterWizard : EditorWindow {
 			} else {
 				localCoords = (Transform)EditorGUILayout.ObjectField("Local coords", localCoords, typeof(Transform), true);
 			}
+			EditorGUILayout.Separator();
 		} else {
 			string ext = Path.GetExtension(src_path).ToLowerInvariant();
 			if (ext == ".ply") {
@@ -120,29 +139,75 @@ public class ModelConverterWizard : EditorWindow {
 			} else if (ext == ".csv") {
 			} else if (ext == ".txt") {
 			} else {
+				known_format_input = false;
 				EditorGUILayout.HelpBox("Unknown input format: "+ext, MessageType.Error);
+				EditorGUILayout.Separator();
+			}
+			if (known_format_input) {
+				discretize = EditorGUILayout.Toggle("Discretize", discretize);
+				voxelSize = EditorGUILayout.FloatField("Voxel size", voxelSize);
+				maxResolution = EditorGUILayout.IntField("Max resolution", maxResolution);
+				colorSpace = (ColorSpaces)EditorGUILayout.EnumPopup("Color space", colorSpace);
+				floodFill = EditorGUILayout.Toggle("Flood Fill", floodFill);
+				var wide_mode = EditorGUIUtility.wideMode;
+				EditorGUIUtility.wideMode = true;
+				marginMin = EditorGUILayout.Vector3Field("Margin min", marginMin);
+				marginMax = EditorGUILayout.Vector3Field("Margin max", marginMax);
+				EditorGUIUtility.wideMode = wide_mode;
+				seedCoords = EditorGUILayout.TextField("Seed coords", seedCoords);
+				EditorGUILayout.Separator();
+			}
+
+			if (src_path != src_path_prev) {
+				input_file_exists = File.Exists(src_path);
+				src_path_prev = src_path;
 			}
 		}
 
-		if (!string.IsNullOrEmpty(dst_path)) {
+		bool output_path_empty = string.IsNullOrEmpty(dst_path);
+		bool known_format_output = true;
+		if (output_path_empty) {
+			known_format_output = false;
+		} else {
 			string ext = Path.GetExtension(dst_path).ToLowerInvariant();
 			if (ext == ".ply") {
 				writeBinary = EditorGUILayout.Toggle("Binary", writeBinary);
+				EditorGUILayout.Separator();
 			} else if (ext == ".pcd") {
 				writeBinary = EditorGUILayout.Toggle("Binary", writeBinary);
 				writeCompressed = EditorGUILayout.Toggle("Compressed", writeCompressed);
+				EditorGUILayout.Separator();
 			} else if (ext == ".csv") {
 			} else if (ext == ".txt") {
 			} else {
+				known_format_output = false;
 				EditorGUILayout.HelpBox("Unknown output format: "+ext, MessageType.Error);
+				EditorGUILayout.Separator();
 			}
 		}
 
-		EditorGUILayout.Space();
+		bool can_convert_file = true;
+		if (known_format_input & known_format_output) {
+			if ((string.Compare(src_path, dst_path, true) == 0) & !input_path_empty) {
+				can_convert_file = false;
+				EditorGUILayout.HelpBox("Input and output files must be different", MessageType.Error);
+				EditorGUILayout.Separator();
+			} else if (!input_path_empty & !input_file_exists) {
+				can_convert_file = false;
+				EditorGUILayout.HelpBox("Input file does not exist", MessageType.Error);
+				EditorGUILayout.Separator();
+			} else if (output_path_empty) {
+				can_convert_file = false;
+				EditorGUILayout.HelpBox("Output file path must be specified", MessageType.Error);
+				EditorGUILayout.Separator();
+			}
+		}
 
-		if (File.Exists(src_path)) {
+		if (input_file_exists) {
+			GUI.enabled = can_convert_file;
 			if (GUILayout.Button("Convert File")) Convert_File();
-		} else if (!string.IsNullOrEmpty(src_path)) {
+			GUI.enabled = true;
+		} else if (!input_path_empty) {
 			GUI.enabled = false;
 			GUILayout.Button("Convert File");
 			GUI.enabled = true;
@@ -200,17 +265,189 @@ public class ModelConverterWizard : EditorWindow {
 	// =========================================================== //
 
 	void Convert_File() {
-		using (var pcr = new PointCloudFile.Reader(src_path)) {
+		EditorUtility.ClearProgressBar();
+		if (!discretize) {
 			using (var writer = new PointCloudFile.Writer(dst_path, writeBinary, writeCompressed)) {
-				Vector3 pos; Color32 color; Vector3 normal;
-				while (pcr.Read(out pos, out color, out normal)) {
-					writer.Write(pos, color, normal);
+				Read_File("Converting...", writer.Write);
+			}
+		} else {
+			Discretize_File();
+		}
+		EditorUtility.ClearProgressBar();
+	}
+	bool Read_File(string title, System.Action<Vector3, Color32, Vector3> callback) {
+		string info = "Point #";
+		int count = 0, wrap = 1000;
+		using (var pcr = new PointCloudFile.Reader(src_path)) {
+			Vector3 pos; Color32 color; Vector3 normal;
+			while (pcr.Read(out pos, out color, out normal)) {
+				callback(pos, color, normal);
+				count++;
+				if ((count % wrap) == 0) {
+					float progress = (count / (wrap*100f)) % 1f;
+					if (EditorUtility.DisplayCancelableProgressBar(title, info+count, progress)) return true;
 				}
+			}
+		}
+		return false;
+	}
+	void Discretize_File() {
+		var discretizer = new PointCloudDiscretizer();
+		if (Read_File("Reading...", discretizer.Add)) return;
+		if (ProcessDiscretizerAsync(discretizer)) return;
+//		ProcessDiscretizer(discretizer);
+		Write_Discretized(discretizer);
+	}
+	void Write_Discretized(PointCloudDiscretizer discretizer) {
+		var vo = discretizer.voxelOffset;
+		var vs = discretizer.voxelSize;
+		var vb = discretizer.voxelBounds;
+		var comments = new List<string>();
+		comments.Add("voxel_grid x="+vo.x+", y="+vo.y+", z="+vo.z+", cell="+vs);
+		comments.Add("voxel_bounds xmin="+vb.xMin+", ymin="+vb.yMin+", zmin="+vb.zMin+", xmax="+vb.xMax+", ymax="+vb.yMax+", zmax="+vb.zMax);
+		string title = "Writing...", info = "Point #";
+		int count = 0, wrap = 1000;
+		using (var pcw = new PointCloudFile.Writer(dst_path, writeBinary, writeCompressed, comments)) {
+			foreach (var voxinfo in discretizer.EnumerateVoxels(colorSpace)) {
+				pcw.Write(discretizer.VoxelCenter(voxinfo.pos), voxinfo.color, voxinfo.normal);
+				count++;
+				if ((count % wrap) == 0) {
+					float progress = (count / (float)discretizer.voxelCount);
+					if (EditorUtility.DisplayCancelableProgressBar(title, info+count, progress)) return;
+				}
+			}
+		}
+	}
+	bool ProcessDiscretizerAsync(PointCloudDiscretizer discretizer) {
+		bool finished = false;
+		System.Exception error = null;
+		var thread = new Thread(new ThreadStart(() => {
+			try {
+				ProcessDiscretizer(discretizer);
+			} catch (System.Exception e) {
+				error = e;
+			}
+			finished = true;
+		}));
+		thread.Start();
+		while (!finished) {
+			string title = discretizer.task;
+			if (title == null) title = string.Empty;
+			title += "...";
+			if (EditorUtility.DisplayCancelableProgressBar(title, string.Empty, discretizer.progress)) {
+				discretizer.halt = true;
+				return true;
+			}
+		}
+		if (error != null) Debug.LogException(error);
+		return false;
+	}
+	void ProcessDiscretizer(PointCloudDiscretizer discretizer) {
+		float voxel_size = voxelSize;
+		if (voxel_size <= float.Epsilon) {
+			voxel_size = discretizer.EstimateVoxelSize();
+			if (discretizer.halt) return;
+		}
+		if (maxResolution > 0) {
+			var bounds = discretizer.pointBounds;
+			float max_bounds = Mathf.Max(Mathf.Max(bounds.size.x, bounds.size.y), bounds.size.z);
+			int n = Mathf.RoundToInt(max_bounds / voxel_size) + 1;
+			if (n > maxResolution) voxel_size = (max_bounds / Mathf.Max(maxResolution-1, 0.25f));
+		}
+		if (discretizer.halt) return;
+		discretizer.Discretize(voxel_size);
+		if (discretizer.halt) return;
+		if (floodFill) {
+			var limits = CalcDiscretizerLimits(discretizer, marginMin, marginMax);
+			if (discretizer.halt) return;
+			discretizer.FloodFill(DiscretizerSeeds(seedCoords, limits), limits);
+		}
+	}
+	static BoundsInt CalcDiscretizerLimits(PointCloudDiscretizer discretizer, Vector3 marginMin, Vector3 marginMax) {
+		var bounds_size = discretizer.voxelBounds.size;
+		var limits = discretizer.voxelBounds;
+		limits.xMin -= CalcMargin(marginMin.x, bounds_size.x);
+		limits.yMin -= CalcMargin(marginMin.y, bounds_size.y);
+		limits.zMin -= CalcMargin(marginMin.z, bounds_size.z);
+		limits.xMax += CalcMargin(marginMax.x, bounds_size.x);
+		limits.yMax += CalcMargin(marginMax.y, bounds_size.y);
+		limits.zMax += CalcMargin(marginMax.z, bounds_size.z);
+		return limits;
+	}
+	static int CalcMargin(float margin, int size) {
+		if (margin >= 0.5f) return 1;
+		if (margin >= 0f) return 0;
+		if (margin <= -1f) return Mathf.RoundToInt(margin);
+		return Mathf.RoundToInt(margin*size);
+	}
+	static IEnumerable<Vector3Int> DiscretizerSeeds(string seed_coords, BoundsInt limits) {
+		seed_coords = seed_coords.Replace(" ", "");
+		if (seed_coords.Length == 0) {
+			seed_coords = "-x;-y;-z;x;y;z";
+		} else {
+			seed_coords = seed_coords.Replace("+", "");
+			seed_coords = seed_coords.ToLowerInvariant();
+		}
+		Vector3Int min = limits.min, max = limits.max;
+		foreach (var item in seed_coords.Split(';')) {
+			if (string.IsNullOrEmpty(item)) continue;
+			if (item == "-x") {
+				for (int y = min.y; y <= max.y; y++) {
+					for (int z = min.z; z <= max.z; z++) {
+						yield return new Vector3Int(min.x, y, z);
+					}
+				}
+			} else if (item == "x") {
+				for (int y = min.y; y <= max.y; y++) {
+					for (int z = min.z; z <= max.z; z++) {
+						yield return new Vector3Int(max.x, y, z);
+					}
+				}
+			} else if (item == "-y") {
+				for (int x = min.x; x <= max.x; x++) {
+					for (int z = min.z; z <= max.z; z++) {
+						yield return new Vector3Int(x, min.y, z);
+					}
+				}
+			} else if (item == "y") {
+				for (int x = min.x; x <= max.x; x++) {
+					for (int z = min.z; z <= max.z; z++) {
+						yield return new Vector3Int(x, max.y, z);
+					}
+				}
+			} else if (item == "-z") {
+				for (int x = min.x; x <= max.x; x++) {
+					for (int y = min.y; y <= max.y; y++) {
+						yield return new Vector3Int(x, y, min.z);
+					}
+				}
+			} else if (item == "z") {
+				for (int x = min.x; x <= max.x; x++) {
+					for (int y = min.y; y <= max.y; y++) {
+						yield return new Vector3Int(x, y, max.z);
+					}
+				}
+			} else {
+				var parts = item.Split(',');
+				if (parts.Length != 3) continue;
+				var seedF = default(Vector3);
+				if (!float.TryParse(parts[0], out seedF.x)) continue;
+				if (!float.TryParse(parts[1], out seedF.y)) continue;
+				if (!float.TryParse(parts[2], out seedF.z)) continue;
+				var seed = Vector3Int.zero;
+				seed.x = Mathf.RoundToInt(Mathf.Lerp(min.x, max.x, seedF.x));
+				seed.y = Mathf.RoundToInt(Mathf.Lerp(min.y, max.y, seedF.y));
+				seed.z = Mathf.RoundToInt(Mathf.Lerp(min.z, max.z, seedF.z));
+				seed.x = Mathf.Clamp(seed.x, min.x, max.x);
+				seed.y = Mathf.Clamp(seed.y, min.y, max.y);
+				seed.z = Mathf.Clamp(seed.z, min.z, max.z);
+				yield return seed;
 			}
 		}
 	}
 
 	void Convert_Selection() {
+		EditorUtility.ClearProgressBar();
 		if (!string.IsNullOrEmpty(dst_path)) {
 			using (var writer = new PointCloudFile.Writer(dst_path, writeBinary, writeCompressed)) {
 				Convert_Selection(writer.Write);
@@ -247,6 +484,7 @@ public class ModelConverterWizard : EditorWindow {
 				tfm.localScale = localCoords.localScale;
 			}
 		}
+		EditorUtility.ClearProgressBar();
 	}
 
 	void Convert_Selection(System.Action<Vector3, Color32, Vector3> callback) {
@@ -258,13 +496,12 @@ public class ModelConverterWizard : EditorWindow {
 			var sel_mode = SelectionMode.Unfiltered;
 			if (includeChildren) sel_mode = SelectionMode.Deep;
 			foreach (var tfm in Selection.GetTransforms(sel_mode)) {
-				Sample_Selection(tfm, callback);
+				if (Sample_Selection(tfm, callback)) return;
 			}
 		}
 	}
 
 	void Voxelize_Selection(Voxelizer voxelizer, System.Action<Vector3, Color32, Vector3> callback) {
-		EditorUtility.ClearProgressBar();
 		string title = "Voxelizing...", info = "";
 		EditorUtility.DisplayCancelableProgressBar(title, info, 0);
 		var matrix = voxelizer.transform.localToWorldMatrix;
@@ -290,13 +527,12 @@ public class ModelConverterWizard : EditorWindow {
 			});
 		}
 		voxelizer.Cleanup();
-		EditorUtility.ClearProgressBar();
 	}
 
-	void Sample_Selection(Transform tfm, System.Action<Vector3, Color32, Vector3> callback) {
+	bool Sample_Selection(Transform tfm, System.Action<Vector3, Color32, Vector3> callback) {
 		Mesh mesh; Material[] mats;
 		GetMeshAndMaterials(tfm, out mesh, out mats);
-		if (!mesh || (mats == null)) return;
+		if (!mesh || (mats == null)) return false;
 		var matrix = tfm.localToWorldMatrix;
 		if (localCoords) matrix = localCoords.worldToLocalMatrix * matrix;
 		var verts = mesh.vertices;
@@ -323,10 +559,13 @@ public class ModelConverterWizard : EditorWindow {
 					Debug.LogError(exc.ToString());
 				}
 			}
+			string title = "Sampling "+tfm.name+" ["+smi+"]...", info = "";
 			var topology = mesh.GetTopology(smi);
 			if (topology == MeshTopology.Points) {
 				var indices = mesh.GetIndices(smi, true);
 				for (int i = 0; i < indices.Length; i++) {
+					float progress = i/(float)indices.Length;
+					if (EditorUtility.DisplayCancelableProgressBar(title, info, progress)) return true;
 					int i0 = indices[i];
 					Vector3 p0 = verts[i0];
 					Vector3 n0 = normals[i0];
@@ -343,6 +582,8 @@ public class ModelConverterWizard : EditorWindow {
 				int icount = indices.Length, di = 2;
 				if (topology == MeshTopology.LineStrip) { icount--; di = 1; }
 				for (int i = 0; i < icount; i += di) {
+					float progress = i/(float)icount;
+					if (EditorUtility.DisplayCancelableProgressBar(title, info, progress)) return true;
 					int i0 = indices[i], i1 = indices[i+1];
 					Vector3 p0 = verts[i0], p1 = verts[i1];
 					Vector3 n0 = normals[i0], n1 = normals[i1];
@@ -361,6 +602,8 @@ public class ModelConverterWizard : EditorWindow {
 			} else { // tris, quads
 				var tris = mesh.GetTriangles(smi, true);
 				for (int ti = 0; ti < tris.Length; ti += 3) {
+					float progress = ti/(float)tris.Length;
+					if (EditorUtility.DisplayCancelableProgressBar(title, info, progress)) return true;
 					int i0 = tris[ti], i1 = tris[ti+1], i2 = tris[ti+2];
 					Vector3 p0 = verts[i0], p1 = verts[i1], p2 = verts[i2];
 					Vector3 n0 = normals[i0], n1 = normals[i1], n2 = normals[i2];
@@ -378,6 +621,7 @@ public class ModelConverterWizard : EditorWindow {
 				}
 			}
 		}
+		return false;
 	}
 	static Color GetPixel(Texture2D tex, Vector2 uv) {
 		if (tex.filterMode == FilterMode.Point) {

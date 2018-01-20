@@ -64,9 +64,12 @@ public static class PointCloudFile {
 		List<ChannelInfo> channel_infos;
 		int i;
 		byte[] row;
+		IList<string> comments;
 
-		public Reader(string path) {
+		public Reader(string path, IList<string> comments=null) {
 			//if (!File.Exists(path)) return;
+
+			this.comments = comments;
 
 			string ext = Path.GetExtension(path).ToLowerInvariant();
 			channel_infos = new List<ChannelInfo>();
@@ -282,6 +285,8 @@ public static class PointCloudFile {
 							prop_offset += prop_size;
 						}
 					}
+				} else if (parts[0] == "comment") {
+					if (comments != null) comments.Add(string.Join(" ", parts, 1, parts.Length-1));
 				} else if (parts[0] == "end_header") {
 					break;
 				}
@@ -411,7 +416,7 @@ public static class PointCloudFile {
 		string[] fields = new string[]{"x","y","z","r","g","b","nx","ny","nz"};
 		string sep = " ";
 
-		public Writer(string path, bool binary=false, bool compressed=false) {
+		public Writer(string path, bool binary=false, bool compressed=false, IList<string> comments=null) {
 			string ext = Path.GetExtension(path).ToLowerInvariant();
 
 			vcpos = new List<long>();
@@ -425,6 +430,11 @@ public static class PointCloudFile {
 				string format = (binary ? "binary_little_endian" : "ascii");
 				ts.WriteLine("ply");
 				ts.WriteLine("format "+format+" 1.0");
+				if (comments != null) {
+					foreach (var comment in comments) {
+						ts.WriteLine("comment "+comment);
+					}
+				}
 				ts.Write("element vertex "); WriteVSpace();
 				ts.WriteLine("property float x");
 				ts.WriteLine("property float y");
