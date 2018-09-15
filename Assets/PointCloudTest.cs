@@ -22,6 +22,8 @@
 
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
 using UnityEngine;
 
 public class PointCloudTest : MonoBehaviour {
@@ -32,119 +34,154 @@ public class PointCloudTest : MonoBehaviour {
 
 	System.Diagnostics.Stopwatch stopwatch;
 
-	public bool discretize = false;
-	public bool save_discretized = false;
-	public bool flood_fill = false;
-	PointCloudDiscretizer discretizer;
-
-	public float voxel_size = -1;
-
-	public byte alpha_empty=64, alpha_occupied=64;
-
 	Vector3 initial_scale;
-
-	public ColorSpaces color_space = ColorSpaces.GammaRGB;
-
-	public float limitsDY0 = 0;
-
-	string PrintNode<T>(LeafOctree<T> octree, Vector3Int pos, OctreeAccess access) {
-		var info = octree.GetInfo(pos, access);
-		if (info.node != null) {
-			return (pos+" | "+access+": "+info.node.data.ToString()+"; info.pos="+info.pos+", info.level="+info.level);
-		} else {
-			return (pos+" | "+access+": "+"Node not found!");
-		}
-	}
 
 	void Start() {
 		stopwatch = new System.Diagnostics.Stopwatch();
 
 		initial_scale = transform.localScale;
 
-		if (discretize) {
-			DiscretizeAndSave();
-			if (flood_fill) {
-				var seeds = new List<Vector3Int>();
-				var min = discretizer.voxelBounds.min;
-				var max = discretizer.voxelBounds.max;
-				var mid = Vector3Int.RoundToInt(discretizer.voxelBounds.center);
-				seeds.Add(new Vector3Int(mid.x, max.y+1, mid.z));
-				var bounds_size = discretizer.voxelBounds.size;
-				var limits = discretizer.voxelBounds;
-				limits.xMin -= 1;
-				limits.yMin -= 1;
-				limits.zMin -= 1;
-				limits.xMax += 1;
-				limits.yMax += 1;
-				limits.zMax += 1;
-				limits.yMin += (int)(limitsDY0 * bounds_size.y);
-				discretizer.FloodFill(seeds, limits);
-			}
-		}
 		BuildMesh();
 	}
 
-	void OnDrawGizmos() {
-		if (discretizer != null) {
-			var prev_matrix = Gizmos.matrix;
-			Gizmos.matrix = transform.localToWorldMatrix;
-			discretizer.Draw(alpha_empty, alpha_occupied);
-			Gizmos.matrix = prev_matrix;
+	void BuildMesh() {
+		if (!File.Exists(path)) { Debug.LogError("File does not exist"); return; }
+
+		string ext = Path.GetExtension(path).ToLowerInvariant();
+		string cached_path = (ext == ".cached" ? path : path+".cached");
+		if (File.Exists(cached_path)) {
+			if (File.GetLastWriteTime(cached_path) >= File.GetLastWriteTime(path)) {
+				BuildMesh_Cached(cached_path);
+				return;
+			}
+		}
+
+		BuildMesh_Uncached(cached_path);
+	}
+
+	void BuildMesh_Cached(string cached_path) {
+		stopwatch.Start();
+		var stream = new FileStream(cached_path, FileMode.Open, FileAccess.Read);
+		var br = new BinaryReader(stream);
+		int vCount = br.ReadInt32();
+		var vBytes = br.ReadBytes(vCount*3*4);
+		int cCount = br.ReadInt32();
+		var cBytes = br.ReadBytes(cCount*4*1);
+		int nCount = br.ReadInt32();
+		var nBytes = br.ReadBytes(nCount*3*4);
+		stream.Close();
+		stream.Dispose();
+		var vertices = ArrayCaster<Vector3>.Convert(vBytes);
+		var colors = ArrayCaster<Color32>.Convert(cBytes);
+		var normals = ArrayCaster<Vector3>.Convert(nBytes);
+		stopwatch.Stop();
+		Debug.Log("Read "+cached_path+" : "+vertices.Length+" ("+stopwatch.ElapsedMilliseconds+" ms)");
+		if (colors.Length == 0) colors = null;
+		if (normals.Length == 0) normals = null;
+		BuildMesh(vertices, colors, normals);
+	}
+
+	// http://markheath.net/post/wavebuffer-casting-byte-arrays-to-float
+	// https://github.com/naudio/NAudio/blob/master/NAudio/Wave/WaveOutputs/WaveBuffer.cs
+	[StructLayout(LayoutKind.Explicit, Pack = 2)]
+	struct ArrayCaster<T> where T : struct {
+		[FieldOffset(0)] byte[] bytes;
+		[FieldOffset(0)] T[] casted;
+		public byte[] Bytes { get { return bytes; } }
+		public int Length { get { return bytes.Length; } }
+		public T[] Casted { get { return casted; } }
+		public int Count { get { return bytes.Length / Marshal.SizeOf(default(T)); } }
+		public ArrayCaster(byte[] bytes) {
+			casted = null;
+			this.bytes = bytes;
+		}
+		public T[] ToArray() {
+			var array = new T[Count];
+			// Array.Copy() throws error due to mismatching types
+			for (int i = 0; i < array.Length; ++i) {
+				array[i] = casted[i];
+			}
+			return array;
+		}
+		public static implicit operator byte[](ArrayCaster<T> caster) {
+			return caster.bytes;
+		}
+		public static implicit operator T[](ArrayCaster<T> caster) {
+			return caster.casted;
+		}
+		public static T[] Convert(byte[] bytes) {
+			return (new ArrayCaster<T>(bytes)).ToArray();
 		}
 	}
 
-	void BuildMesh() {
+	void BuildMesh_Uncached(string cached_path) {
 		var vertices = new List<Vector3>();
 		var colors = new List<Color32>();
 		var normals = new List<Vector3>();
-		Bounds bounds = new Bounds();
 		int full_count = 0;
 
-		if (discretizer == null) {
-			using (var pcr = new PointCloudFile.Reader(path)) {
-				Vector3 pos; Color32 color; Vector3 normal;
-				while (pcr.Read(out pos, out color, out normal)) {
-					full_count++;
-					if (float.IsNaN(pos.x)|float.IsNaN(pos.y)|float.IsNaN(pos.y)) {
-						Debug.Log(vertices.Count+" is NaN");
-						continue;
-					}
-					if (float.IsInfinity(pos.x)|float.IsInfinity(pos.y)|float.IsInfinity(pos.y)) {
-						Debug.Log(vertices.Count+" is inf");
-						continue;
-					}
-					if (Random.value > viz_amount) return;
-					vertices.Add(pos*scale); colors.Add(color); normals.Add(normal);
-					if (vertices.Count == 1) {
-						bounds = new Bounds(vertices[0], Vector3.zero);
-					} else {
-						bounds.Encapsulate(vertices[vertices.Count-1]);
-					}
-				}
-			}
-			Debug.Log("Read "+path+" : "+full_count+" -> "+vertices.Count);
-		} else {
-			foreach (var voxel_info in discretizer.EnumerateVoxels(color_space)) {
-				var pos = discretizer.VoxelCenter(voxel_info.pos);
-				var color = voxel_info.color;
-				var normal = voxel_info.normal;
+		stopwatch.Start();
+		using (var pcr = new PointCloudFile.Reader(path)) {
+			Vector3 pos; Color32 color; Vector3 normal;
+			while (pcr.Read(out pos, out color, out normal)) {
 				full_count++;
-				vertices.Add(pos); colors.Add(color); normals.Add(normal);
-				if (vertices.Count == 1) {
-					bounds = new Bounds(vertices[0], Vector3.zero);
-				} else {
-					bounds.Encapsulate(vertices[vertices.Count-1]);
+				if (float.IsNaN(pos.x)|float.IsNaN(pos.y)|float.IsNaN(pos.y)) {
+					Debug.Log(vertices.Count+" is NaN");
+					continue;
 				}
+				if (float.IsInfinity(pos.x)|float.IsInfinity(pos.y)|float.IsInfinity(pos.y)) {
+					Debug.Log(vertices.Count+" is inf");
+					continue;
+				}
+				if (Random.value > viz_amount) return;
+				vertices.Add(pos*scale); colors.Add(color); normals.Add(normal);
 			}
 		}
+		stopwatch.Stop();
+		Debug.Log("Read "+path+" : "+full_count+" -> "+vertices.Count+" ("+stopwatch.ElapsedMilliseconds+" ms)");
 
-		Debug.Log("Bounds = "+bounds);
+		WriteCachedMesh(cached_path, vertices, colors, normals);
 
-		if (autoscale) {
-			Vector3 norm = initial_scale / Mathf.Max(Mathf.Max(bounds.size.x, bounds.size.y), bounds.size.z);
-			transform.position -= Vector3.Scale(bounds.center, norm);
-			transform.localScale = norm;
+		BuildMesh(vertices, colors, normals);
+	}
+
+	void WriteCachedMesh(string cached_path, IList<Vector3> vertices, IList<Color32> colors, IList<Vector3> normals) {
+		var stream = new FileStream(cached_path, FileMode.Create, FileAccess.Write);
+		var bw = new BinaryWriter(stream);
+		bw.Write(vertices.Count);
+		for (int i = 0; i < vertices.Count; i++) {
+			var item = vertices[i];
+			bw.Write(item.x); bw.Write(item.y); bw.Write(item.z);
 		}
+		if (colors != null) {
+			bw.Write(colors.Count);
+			for (int i = 0; i < colors.Count; i++) {
+				var item = colors[i];
+				bw.Write(item.r); bw.Write(item.g); bw.Write(item.b); bw.Write(item.a);
+			}
+		} else {
+			bw.Write((int)0);
+		}
+		if (normals != null) {
+			bw.Write(normals.Count);
+			for (int i = 0; i < normals.Count; i++) {
+				var item = normals[i];
+				bw.Write(item.x); bw.Write(item.y); bw.Write(item.z);
+			}
+		} else {
+			bw.Write((int)0);
+		}
+		bw.Flush();
+		stream.Flush();
+		stream.Close();
+		stream.Dispose();
+		Debug.Log("Cached version saved: "+cached_path);
+	}
+
+	void BuildMesh(IList<Vector3> vertices, IList<Color32> colors, IList<Vector3> normals) {
+		var vA = vertices as Vector3[]; var vL = vertices as List<Vector3>;
+		var cA = colors as Color32[]; var cL = colors as List<Color32>;
+		var nA = normals as Vector3[]; var nL = normals as List<Vector3>;
 
 		var indices = new int[vertices.Count];
 		for (int i = 0; i < indices.Length; i++) {
@@ -153,69 +190,26 @@ public class PointCloudTest : MonoBehaviour {
 
 		var mesh = new Mesh();
 		mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-		mesh.SetVertices(vertices);
-		mesh.SetColors(colors);
-		mesh.SetNormals(normals);
+		if (vA != null) { mesh.vertices = vA; } else if (vL != null) { mesh.SetVertices(vL); }
+		if (cA != null) { mesh.colors32 = cA; } else if (cL != null) { mesh.SetColors(cL); }
+		if (nA != null) { mesh.normals = nA; } else if (nL != null) { mesh.SetNormals(nL); }
 		mesh.SetIndices(indices, MeshTopology.Points, 0, true);
 
 		var mesh_filter = GetComponent<MeshFilter>();
 		mesh_filter.sharedMesh = mesh;
-	}
 
-	public Color colorA = Color.red;
-	public Color colorB = Color.green;
-	public int QuadExtents = 64;
+		var mesh_renderer = GetComponent<MeshRenderer>();
+		mesh_renderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+		mesh_renderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+		mesh_renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+		mesh_renderer.receiveShadows = false;
+		mesh_renderer.motionVectorGenerationMode = MotionVectorGenerationMode.ForceNoMotion;
 
-	void DiscretizeAndSave() {
-		discretizer = new PointCloudDiscretizer();
-
-		stopwatch.Start();
-		using (var pcr = new PointCloudFile.Reader(path)) {
-			Vector3 pos; Color32 color; Vector3 normal;
-			while (pcr.Read(out pos, out color, out normal)) {
-				discretizer.Add(pos, color, normal);
-			}
-		}
-		stopwatch.Stop();
-		Debug.Log("File load: "+stopwatch.ElapsedMilliseconds+" ms");
-
-//		for (int y = -QuadExtents; y < QuadExtents; y++) {
-//			for (int x = -QuadExtents; x < QuadExtents; x++) {
-//				var pos = new Vector3(x, y, 0);
-//				var color = ((x & 1) != (y & 1) ? colorA : colorB);
-//				var normal = Vector3.zero;
-//				discretizer.Add(pos, color, normal);
-//			}
-//		}
-
-//		for (int z = -QuadExtents; z < QuadExtents; z++) {
-//			for (int x = -QuadExtents; x < QuadExtents; x++) {
-//				var pos = new Vector3(x, x+z, z);
-//				var color = ((x & 1) != (z & 1) ? colorA : colorB);
-//				var normal = Vector3.zero;
-//				discretizer.Add(pos, color, normal);
-//			}
-//		}
-//		for (int z = -QuadExtents; z < QuadExtents; z++) {
-//			for (int x = -QuadExtents; x < QuadExtents; x++) {
-//				var pos = new Vector3(x, 0, z);
-//				var color = ((x & 1) != (z & 1) ? colorA : colorB);
-//				var normal = Vector3.zero;
-//				discretizer.Add(pos, color, normal);
-//			}
-//		}
-
-		discretizer.Discretize(voxel_size);
-
-		if (save_discretized) {
-			string dst_path = path.Substring(0, path.Length - System.IO.Path.GetExtension(path).Length);
-			dst_path += "_int.ply";
-			Debug.Log(dst_path);
-			using (var pcw = new PointCloudFile.Writer(dst_path)) {
-				foreach (var voxinfo in discretizer.EnumerateVoxels(color_space)) {
-					pcw.Write((Vector3)voxinfo.pos, voxinfo.color, voxinfo.normal);
-				}
-			}
+		if (autoscale) {
+			var bounds = mesh.bounds;
+			Vector3 norm = initial_scale / Mathf.Max(Mathf.Max(bounds.size.x, bounds.size.y), bounds.size.z);
+			transform.position -= Vector3.Scale(bounds.center, norm);
+			transform.localScale = norm;
 		}
 	}
 }

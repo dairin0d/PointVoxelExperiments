@@ -177,6 +177,23 @@ public class OctreeNode<T> {
 		n111 = null;
 	}
 
+	public void Linearize(int[] nodes, T[] datas, ref int id) {
+		int id0 = id, pos0 = id0 << 3;
+		datas[id0] = data;
+		for (int i = 0; i < 8; i++) {
+			var subnode = this[i];
+			if (subnode == null) {
+				nodes[pos0|i] = -1;
+			} else if (subnode == this) {
+				nodes[pos0|i] = id0;
+			} else {
+				++id;
+				nodes[pos0|i] = id;
+				subnode.Linearize(nodes, datas, ref id);
+			}
+		}
+	}
+
 	public struct Info {
 		public Vector3Int pos;
 		public int level;
@@ -245,24 +262,28 @@ public class LeafOctree<T> : IVoxelCloud<T> {
 		get { return 1 << Levels; }
 	}
 
+	public int NodeCount;// { get; protected set; }
+
 	public LeafOctree() {
-		Root = null; Levels = 0; Count = 0;
+		Root = null; Levels = 0; Count = 0; NodeCount = 0;
 	}
-	public LeafOctree(OctreeNode<T> root, int levels=-1, int count=-1) {
-		if (root == null) levels = 0;
-		this.Root = root; this.Levels = levels; this.Count = count;
-		if ((levels < 0) | (count < 0)) CalcLevels(root, 0);
+	public LeafOctree(OctreeNode<T> root, int levels=-1, int count=-1, int node_count=-1) {
+		if (root == null) { levels = 0; count = 0; node_count = 0; }
+		this.Root = root; this.Levels = levels; this.Count = count; this.NodeCount = node_count;
+		if ((levels < 0) | (count < 0) | (node_count < 0)) CalcLevels(root, 0);
 	}
 	void CalcLevels(OctreeNode<T> node, int level) {
+		++NodeCount;
 		if (level > Levels) {
 			Levels = level;
 			Count = 1;
 		} else if (level == Levels) {
-			Count++;
+			++Count;
 		}
 		if (level >= 31) return; // int32 range limits
 		for (int iXYZ = 0; iXYZ < 8; iXYZ++) {
 			var subnode = node[iXYZ];
+			if (subnode == node) continue; // just in case there are self-references
 			if (subnode != null) CalcLevels(subnode, level+1);
 		}
 	}
@@ -281,6 +302,7 @@ public class LeafOctree<T> : IVoxelCloud<T> {
 		while (!InRange(p)) {
 			if (Root == null) {
 				Root = new OctreeNode<T>();
+				++NodeCount;
 			} else {
 				InitOne(ref Root.n000, 1|2|4);
 				InitOne(ref Root.n001, 0|2|4);
@@ -291,12 +313,13 @@ public class LeafOctree<T> : IVoxelCloud<T> {
 				InitOne(ref Root.n110, 1|0|0);
 				InitOne(ref Root.n111, 0|0|0);
 			}
-			Levels++;
+			++Levels;
 		}
 	}
-	static void InitOne(ref OctreeNode<T> node, int iXYZ) {
+	void InitOne(ref OctreeNode<T> node, int iXYZ) {
 		if (node == null) return;
 		var parent = new OctreeNode<T>();
+		++NodeCount;
 		parent[iXYZ] = node;
 		node = parent;
 	}
@@ -336,6 +359,7 @@ public class LeafOctree<T> : IVoxelCloud<T> {
 				}
 				if (auto_init) {
 					subnode = new OctreeNode<T>();
+					++NodeCount;
 					node[iXYZ] = subnode;
 					if (sz2 == 0) ++Count;
 				}
@@ -378,6 +402,7 @@ public class LeafOctree<T> : IVoxelCloud<T> {
 				int iXYZ = index_stack[i_stack];
 				if (node_stack[i_stack][iXYZ].IsEmpty) {
 					node_stack[i_stack][iXYZ] = null;
+					--NodeCount;
 				}
 				node_stack[i_stack--] = null; // clean up static references
 			}
@@ -444,6 +469,13 @@ public class LeafOctree<T> : IVoxelCloud<T> {
 			pos = pos_stack[i_stack];
 			++level;
 		}
+	}
+
+	public void Linearize(out int[] nodes, out T[] datas) {
+		datas = new T[NodeCount];
+		nodes = new int[NodeCount << 3];
+		int id = 0;
+		Root.Linearize(nodes, datas, ref id);
 	}
 }
 
@@ -846,12 +878,12 @@ public class PointCloudDiscretizer {
 		LinkedPoint py1 = node.data.first;
 		LinkedPoint pz1 = node.data.first;
 		foreach (var p in node.data.Enumerate()) {
-			if (p.pos.x < px0.pos.x) px0 = p;
-			if (p.pos.y < py0.pos.y) py0 = p;
-			if (p.pos.z < pz0.pos.z) pz0 = p;
-			if (p.pos.x > px1.pos.x) px1 = p;
-			if (p.pos.y > py1.pos.y) py1 = p;
-			if (p.pos.z > pz1.pos.z) pz1 = p;
+			if (IsBetterPoint(p, px0, 0, -1)) px0 = p;
+			if (IsBetterPoint(p, py0, 1, -1)) py0 = p;
+			if (IsBetterPoint(p, pz0, 2, -1)) pz0 = p;
+			if (IsBetterPoint(p, px1, 0, 1)) px1 = p;
+			if (IsBetterPoint(p, py1, 1, 1)) py1 = p;
+			if (IsBetterPoint(p, px1, 2, 1)) pz1 = p;
 		}
 		if ((flags & FLAG_XN) != 0) { AggregatePoint(px0, ref normal, ref color, ref count, color_space); }
 		if ((flags & FLAG_YN) != 0) { AggregatePoint(py0, ref normal, ref color, ref count, color_space); }
@@ -864,6 +896,21 @@ public class PointCloudDiscretizer {
 		voxel_info.normal = normal;
 		voxel_info.color = color;
 		return true;
+	}
+	static bool IsBetterPoint(LinkedPoint p, LinkedPoint pD, int axis, int sign) {
+		if (sign < 0) {
+			if (p.pos[axis] < pD.pos[axis]) return true;
+		} else {
+			if (p.pos[axis] > pD.pos[axis]) return true;
+		}
+		if (p.pos[axis] == pD.pos[axis]) {
+			if (sign < 0) {
+				if (p.normal[axis] < pD.normal[axis]) return true;
+			} else {
+				if (p.normal[axis] > pD.normal[axis]) return true;
+			}
+		}
+		return false;
 	}
 	static void AggregatePoint(LinkedPoint p, ref Vector3 normal, ref Color color, ref int count, ColorSpaces color_space) {
 		normal += p.normal; color += ToColorSpace(p.color, color_space); count++;

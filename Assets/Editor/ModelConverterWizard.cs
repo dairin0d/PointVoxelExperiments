@@ -143,26 +143,27 @@ public class ModelConverterWizard : EditorWindow {
 				EditorGUILayout.HelpBox("Unknown input format: "+ext, MessageType.Error);
 				EditorGUILayout.Separator();
 			}
-			if (known_format_input) {
-				discretize = EditorGUILayout.Toggle("Discretize", discretize);
-				voxelSize = EditorGUILayout.FloatField("Voxel size", voxelSize);
-				maxResolution = EditorGUILayout.IntField("Max resolution", maxResolution);
-				colorSpace = (ColorSpaces)EditorGUILayout.EnumPopup("Color space", colorSpace);
-				floodFill = EditorGUILayout.Toggle("Flood Fill", floodFill);
-				var wide_mode = EditorGUIUtility.wideMode;
-				EditorGUIUtility.wideMode = true;
-				marginMin = EditorGUILayout.Vector3Field("Margin min", marginMin);
-				marginMax = EditorGUILayout.Vector3Field("Margin max", marginMax);
-				EditorGUIUtility.wideMode = wide_mode;
-				seedCoords = EditorGUILayout.TextField("Seed coords", seedCoords);
-				EditorGUILayout.Separator();
-			}
-
 			if (src_path != src_path_prev) {
 				input_file_exists = File.Exists(src_path);
 				src_path_prev = src_path;
 			}
 		}
+
+		discretize = EditorGUILayout.Toggle("Discretize", discretize);
+		GUI.enabled = discretize;
+		voxelSize = EditorGUILayout.FloatField("Voxel size", voxelSize);
+		maxResolution = EditorGUILayout.IntField("Max resolution", maxResolution);
+		colorSpace = (ColorSpaces)EditorGUILayout.EnumPopup("Color space", colorSpace);
+		floodFill = EditorGUILayout.Toggle("Flood Fill", floodFill);
+		GUI.enabled &= floodFill;
+		var wide_mode = EditorGUIUtility.wideMode;
+		EditorGUIUtility.wideMode = true;
+		marginMin = EditorGUILayout.Vector3Field("Margin min", marginMin);
+		marginMax = EditorGUILayout.Vector3Field("Margin max", marginMax);
+		EditorGUIUtility.wideMode = wide_mode;
+		seedCoords = EditorGUILayout.TextField("Seed coords", seedCoords);
+		GUI.enabled = true;
+		EditorGUILayout.Separator();
 
 		bool output_path_empty = string.IsNullOrEmpty(dst_path);
 		bool known_format_output = true;
@@ -295,7 +296,6 @@ public class ModelConverterWizard : EditorWindow {
 		var discretizer = new PointCloudDiscretizer();
 		if (Read_File("Reading...", discretizer.Add)) return;
 		if (ProcessDiscretizerAsync(discretizer)) return;
-//		ProcessDiscretizer(discretizer);
 		Write_Discretized(discretizer);
 	}
 	void Write_Discretized(PointCloudDiscretizer discretizer) {
@@ -338,8 +338,12 @@ public class ModelConverterWizard : EditorWindow {
 				discretizer.halt = true;
 				return true;
 			}
+			Thread.Sleep(100);
 		}
-		if (error != null) Debug.LogException(error);
+		if (error != null) { Debug.LogException(error); return true; }
+		if (voxelSize <= float.Epsilon) {
+			Debug.Log("Voxel size = "+discretizer.voxelSize);
+		}
 		return false;
 	}
 	void ProcessDiscretizer(PointCloudDiscretizer discretizer) {
@@ -450,7 +454,7 @@ public class ModelConverterWizard : EditorWindow {
 		EditorUtility.ClearProgressBar();
 		if (!string.IsNullOrEmpty(dst_path)) {
 			using (var writer = new PointCloudFile.Writer(dst_path, writeBinary, writeCompressed)) {
-				Convert_Selection(writer.Write);
+				Convert_Selection(writer.Write, "Writing...");
 			}
 		} else {
 			var vertices = new List<Vector3>();
@@ -458,7 +462,7 @@ public class ModelConverterWizard : EditorWindow {
 			var normals = new List<Vector3>();
 			Convert_Selection((pos, color, normal) => {
 				vertices.Add(pos); colors.Add(color); normals.Add(normal);
-			});
+			}, "Building mesh...");
 
 			var indices = new int[vertices.Count];
 			for (int i = 0; i < indices.Length; i++) { indices[i] = i; }
@@ -487,7 +491,14 @@ public class ModelConverterWizard : EditorWindow {
 		EditorUtility.ClearProgressBar();
 	}
 
-	void Convert_Selection(System.Action<Vector3, Color32, Vector3> callback) {
+	void Convert_Selection(System.Action<Vector3, Color32, Vector3> callback, string title) {
+		var callback0 = callback;
+		PointCloudDiscretizer discretizer = null;
+		if (discretize) {
+			discretizer = new PointCloudDiscretizer();
+			callback = discretizer.Add;
+		}
+
 		Transform active_tfm = Selection.activeTransform;
 		Voxelizer voxelizer = (active_tfm ? active_tfm.GetComponent<Voxelizer>() : null);
 		if (voxelizer) {
@@ -499,23 +510,44 @@ public class ModelConverterWizard : EditorWindow {
 				if (Sample_Selection(tfm, callback)) return;
 			}
 		}
+
+		if (discretizer != null) {
+			if (ProcessDiscretizerAsync(discretizer)) return;
+
+			string info = "Point #";
+			int count = 0, wrap = 1000;
+			foreach (var voxinfo in discretizer.EnumerateVoxels(colorSpace)) {
+				callback0(discretizer.VoxelCenter(voxinfo.pos), voxinfo.color, voxinfo.normal);
+				count++;
+				if ((count % wrap) == 0) {
+					float progress = (count / (float)discretizer.voxelCount);
+					if (EditorUtility.DisplayCancelableProgressBar(title, info+count, progress)) return;
+				}
+			}
+		}
 	}
 
 	void Voxelize_Selection(Voxelizer voxelizer, System.Action<Vector3, Color32, Vector3> callback) {
 		string title = "Voxelizing...", info = "";
 		EditorUtility.DisplayCancelableProgressBar(title, info, 0);
+
 		var matrix = voxelizer.transform.localToWorldMatrix;
 		if (localCoords) matrix = localCoords.worldToLocalMatrix * matrix;
+
 		bool use_matrix = (voxelizer.transform != localCoords);
+
 		var grid_size = voxelizer.gridSize;
 		var bounds = voxelizer.actualBounds;
+
 		int slices_count = voxelizer.slicesCount;
 		for (int slice_id = 0; slice_id < slices_count; slice_id++) {
 			float progress = slice_id / (float)slices_count;
 			if (EditorUtility.DisplayCancelableProgressBar(title, info, progress)) break;
+
 			voxelizer.RenderSlice(slice_id, (p_i, c, n_i) => {
 				Vector3 p = p_i, n = n_i;
-				p = (p + Vector3.one*0.5f) + n * 0.125f;
+				//p = (p + Vector3.one*0.5f) + n * 0.125f;
+				p += Vector3.one*0.5f;
 				p.x /= grid_size.x; p.y /= grid_size.y; p.z /= grid_size.z;
 				p = bounds.min + Vector3.Scale(bounds.size, p);
 				if (use_matrix) {
@@ -523,9 +555,11 @@ public class ModelConverterWizard : EditorWindow {
 					p = matrix.MultiplyPoint3x4(p);
 					n = (matrix.MultiplyPoint3x4(p_old+n) - p).normalized;
 				}
+
 				callback(p, c, n);
 			});
 		}
+
 		voxelizer.Cleanup();
 	}
 
@@ -533,8 +567,10 @@ public class ModelConverterWizard : EditorWindow {
 		Mesh mesh; Material[] mats;
 		GetMeshAndMaterials(tfm, out mesh, out mats);
 		if (!mesh || (mats == null)) return false;
+
 		var matrix = tfm.localToWorldMatrix;
 		if (localCoords) matrix = localCoords.worldToLocalMatrix * matrix;
+
 		var verts = mesh.vertices;
 		var normals = VertAttrArrayOrDefault(mesh.normals, verts.Length);
 		var uvs = VertAttrArrayOrDefault(mesh.uv, verts.Length);
@@ -544,28 +580,43 @@ public class ModelConverterWizard : EditorWindow {
 			verts[vi] = matrix.MultiplyPoint3x4(p);
 			normals[vi] = (matrix.MultiplyPoint3x4(p+normals[vi]) - verts[vi]).normalized;
 		}
+
 		for (int smi = 0; smi < mesh.subMeshCount; smi++) {
 			Material mat = (smi < mats.Length ? mats[smi] : null);
 			if (!mat) continue;
-			Color cm = mat.color;
-			var tex = mat.mainTexture as Texture2D;
-			int tw = 0, th = 0;
-			Color32[] pixels = null;
+
+			Color cm = Color.white; Texture2D tex = null;
+			int tw = 0, th = 0; Color32[] pixels = null;
+			if (mat.HasProperty("_Color")) cm = mat.color;
+			if (mat.HasProperty("_MainTex")) tex = mat.mainTexture as Texture2D;
 			if (tex) {
+				tw = tex.width; th = tex.height;
 				try {
-					tw = tex.width; th = tex.height;
 					pixels = tex.GetPixels32();
 				} catch (System.Exception exc) {
-					Debug.LogError(exc.ToString());
+				}
+				if (pixels == null) {
+					try {
+						SetTextureReadable(tex, true);
+						pixels = tex.GetPixels32();
+					} catch (System.Exception exc) {
+						Debug.LogError(exc.ToString());
+					}
 				}
 			}
+
 			string title = "Sampling "+tfm.name+" ["+smi+"]...", info = "";
+			int wrap = 1000;
+
 			var topology = mesh.GetTopology(smi);
 			if (topology == MeshTopology.Points) {
 				var indices = mesh.GetIndices(smi, true);
 				for (int i = 0; i < indices.Length; i++) {
-					float progress = i/(float)indices.Length;
-					if (EditorUtility.DisplayCancelableProgressBar(title, info, progress)) return true;
+					if ((i % wrap) == 0) {
+						float progress = i/(float)indices.Length;
+						if (EditorUtility.DisplayCancelableProgressBar(title, info, progress)) return true;
+					}
+
 					int i0 = indices[i];
 					Vector3 p0 = verts[i0];
 					Vector3 n0 = normals[i0];
@@ -575,6 +626,7 @@ public class ModelConverterWizard : EditorWindow {
 						c0 *= GetPixel(tex, uv0);
 					}
 					if (c0.a < 0.95f) continue;
+
 					callback(p0, (Color32)c0, n0);
 				}
 			} else if ((topology == MeshTopology.Lines) | (topology == MeshTopology.LineStrip)) {
@@ -582,13 +634,17 @@ public class ModelConverterWizard : EditorWindow {
 				int icount = indices.Length, di = 2;
 				if (topology == MeshTopology.LineStrip) { icount--; di = 1; }
 				for (int i = 0; i < icount; i += di) {
-					float progress = i/(float)icount;
-					if (EditorUtility.DisplayCancelableProgressBar(title, info, progress)) return true;
+					if ((i % wrap) == 0) {
+						float progress = i/(float)icount;
+						if (EditorUtility.DisplayCancelableProgressBar(title, info, progress)) return true;
+					}
+
 					int i0 = indices[i], i1 = indices[i+1];
 					Vector3 p0 = verts[i0], p1 = verts[i1];
 					Vector3 n0 = normals[i0], n1 = normals[i1];
 					Color c0 = colors[i0]*cm, c1 = colors[i1]*cm;
 					Vector2 uv0 = uvs[i0], uv1 = uvs[i1];
+
 					SampleLine(spatialResolution, p0, p1, (p, t) => {
 						Vector3 nt = Vector3.Lerp(n0, n1, t);
 						Color ct = Color.Lerp(c0, c1, t);
@@ -596,19 +652,24 @@ public class ModelConverterWizard : EditorWindow {
 							ct *= GetPixel(tex, Vector2.Lerp(uv0, uv1, t));
 						}
 						if (ct.a < 0.95f) return;
+
 						callback(p, (Color32)ct, nt);
 					});
 				}
 			} else { // tris, quads
 				var tris = mesh.GetTriangles(smi, true);
 				for (int ti = 0; ti < tris.Length; ti += 3) {
-					float progress = ti/(float)tris.Length;
-					if (EditorUtility.DisplayCancelableProgressBar(title, info, progress)) return true;
+					if ((ti % wrap) == 0) {
+						float progress = ti/(float)tris.Length;
+						if (EditorUtility.DisplayCancelableProgressBar(title, info, progress)) return true;
+					}
+
 					int i0 = tris[ti], i1 = tris[ti+1], i2 = tris[ti+2];
 					Vector3 p0 = verts[i0], p1 = verts[i1], p2 = verts[i2];
 					Vector3 n0 = normals[i0], n1 = normals[i1], n2 = normals[i2];
 					Color c0 = colors[i0]*cm, c1 = colors[i1]*cm, c2 = colors[i2]*cm;
 					Vector2 uv0 = uvs[i0], uv1 = uvs[i1], uv2 = uvs[i2];
+
 					SampleTriangle(spatialResolution, p0, p1, p2, (p, b) => {
 						Vector3 nb = (n0*b.x + n1*b.y + n2*b.z);
 						Color cb = (c0*b.x + c1*b.y + c2*b.z);
@@ -616,6 +677,7 @@ public class ModelConverterWizard : EditorWindow {
 							cb *= GetPixel(tex, (uv0*b.x + uv1*b.y + uv2*b.z));
 						}
 						if (cb.a < 0.95f) return;
+
 						callback(p, (Color32)cb, nb);
 					});
 				}
@@ -623,6 +685,17 @@ public class ModelConverterWizard : EditorWindow {
 		}
 		return false;
 	}
+
+	static void SetTextureReadable(Texture2D tex, bool isReadable) {
+		if (!tex) return;
+		string asset_path = AssetDatabase.GetAssetPath(tex);
+		var tex_importer = AssetImporter.GetAtPath(asset_path) as TextureImporter;
+		if (tex_importer == null) return;
+		tex_importer.isReadable = isReadable;
+		AssetDatabase.ImportAsset(asset_path);
+		AssetDatabase.Refresh();
+	}
+
 	static Color GetPixel(Texture2D tex, Vector2 uv) {
 		if (tex.filterMode == FilterMode.Point) {
 			return tex.GetPixel((int)(uv.x*tex.width), (int)(uv.y*tex.height));
@@ -630,6 +703,7 @@ public class ModelConverterWizard : EditorWindow {
 			return tex.GetPixelBilinear(uv.x, uv.y);
 		}
 	}
+
 	static void GetMeshAndMaterials(Transform tfm, out Mesh mesh, out Material[] mats) {
 		mesh = null; mats = null;
 		var skin_renderer = tfm.GetComponent<SkinnedMeshRenderer>();
@@ -649,6 +723,7 @@ public class ModelConverterWizard : EditorWindow {
 			return;
 		}
 	}
+
 	static T[] VertAttrArrayOrDefault<T>(T[] arr, int L, T default_value=default(T)) {
 		if ((arr == null) || (arr.Length < L)) {
 			arr = new T[L];
