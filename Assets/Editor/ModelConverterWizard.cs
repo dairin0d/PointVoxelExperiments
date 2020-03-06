@@ -593,7 +593,7 @@ public class ModelConverterWizard : EditorWindow {
 				tw = tex.width; th = tex.height;
 				try {
 					pixels = tex.GetPixels32();
-				} catch (System.Exception exc) {
+				} catch (System.Exception) {
 				}
 				if (pixels == null) {
 					try {

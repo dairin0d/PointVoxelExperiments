@@ -360,7 +360,7 @@ public static class PointCloudFile {
 				DataType dtype = DataType.F4;
 				try {
 					dtype = (DataType)System.Enum.Parse(typeof(DataType), types[i]+sizes[i], true);
-				} catch (System.ArgumentException exc) {
+				} catch (System.ArgumentException) {
 				}
 				string mapped_name;
 				if (channel_name_map.TryGetValue(names[i], out mapped_name)) {
