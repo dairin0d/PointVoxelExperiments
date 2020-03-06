@@ -71,47 +71,30 @@ public class PointCloudTest : MonoBehaviour {
 		var nBytes = br.ReadBytes(nCount*3*4);
 		stream.Close();
 		stream.Dispose();
-		var vertices = ArrayCaster<Vector3>.Convert(vBytes);
-		var colors = ArrayCaster<Color32>.Convert(cBytes);
-		var normals = ArrayCaster<Vector3>.Convert(nBytes);
+		var vertices = BytesToStructArray<Vector3>(vBytes);
+		var colors = BytesToStructArray<Color32>(cBytes);
+		var normals = BytesToStructArray<Vector3>(nBytes);
 		stopwatch.Stop();
 		Debug.Log("Read "+cached_path+" : "+vertices.Length+" ("+stopwatch.ElapsedMilliseconds+" ms)");
 		if (colors.Length == 0) colors = null;
 		if (normals.Length == 0) normals = null;
 		BuildMesh(vertices, colors, normals);
 	}
-
-	// http://markheath.net/post/wavebuffer-casting-byte-arrays-to-float
-	// https://github.com/naudio/NAudio/blob/master/NAudio/Wave/WaveOutputs/WaveBuffer.cs
-	[StructLayout(LayoutKind.Explicit, Pack = 2)]
-	struct ArrayCaster<T> where T : struct {
-		[FieldOffset(0)] byte[] bytes;
-		[FieldOffset(0)] T[] casted;
-		public byte[] Bytes { get { return bytes; } }
-		public int Length { get { return bytes.Length; } }
-		public T[] Casted { get { return casted; } }
-		public int Count { get { return bytes.Length / Marshal.SizeOf(default(T)); } }
-		public ArrayCaster(byte[] bytes) {
-			casted = null;
-			this.bytes = bytes;
+	
+	// "Union of arrays" trick doesn't work in recent Unity versions
+	// (http://markheath.net/post/wavebuffer-casting-byte-arrays-to-float)
+	// Unity throws TypeLoadException when trying to invoke a method that uses such a struct
+	T[] BytesToStructArray<T>(byte[] bytes) where T : struct {
+		int count = bytes.Length / Marshal.SizeOf(default(T));
+		var array = new T[count];
+		GCHandle handle = GCHandle.Alloc(array, GCHandleType.Pinned);
+		try {
+			var buffer = handle.AddrOfPinnedObject();
+			Marshal.Copy(bytes, 0, buffer, bytes.Length);
+		} finally {
+			handle.Free();
 		}
-		public T[] ToArray() {
-			var array = new T[Count];
-			// Array.Copy() throws error due to mismatching types
-			for (int i = 0; i < array.Length; ++i) {
-				array[i] = casted[i];
-			}
-			return array;
-		}
-		public static implicit operator byte[](ArrayCaster<T> caster) {
-			return caster.bytes;
-		}
-		public static implicit operator T[](ArrayCaster<T> caster) {
-			return caster.casted;
-		}
-		public static T[] Convert(byte[] bytes) {
-			return (new ArrayCaster<T>(bytes)).ToArray();
-		}
+		return array;
 	}
 
 	void BuildMesh_Uncached(string cached_path) {
