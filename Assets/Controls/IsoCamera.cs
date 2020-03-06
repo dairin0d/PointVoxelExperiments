@@ -81,8 +81,10 @@ public class IsoCamera : MonoBehaviour {
 		
 		y = ClampAngle(y, yMinLimit, yMaxLimit);
 		
-		distance_adjustment -= Input.GetAxisRaw("Mouse ScrollWheel");
-		
+		var mousePos = Input.mousePosition;
+		if (cam.pixelRect.Contains(mousePos)) {
+			distance_adjustment -= Input.mouseScrollDelta.y;
+		}
 		
 		var dist = distance;
 		if (cam.orthographic) {
