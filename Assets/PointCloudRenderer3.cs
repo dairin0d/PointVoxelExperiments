@@ -197,9 +197,7 @@ namespace dairin0d.Octree.Rendering {
                 },
             };
             
-            if (System.IO.File.Exists(model_path)) {
-                model_octree = LoadPointCloud(model_path, voxel_size);
-            }
+            model_octree = LoadPointCloud(model_path, voxel_size);
         }
 
         void Update() {
@@ -226,6 +224,8 @@ namespace dairin0d.Octree.Rendering {
             
             GUI.DrawTexture(cam.pixelRect, tex, ScaleMode.StretchToFill, true);
             
+            DrawBox(new Rect(0, Screen.height-lh*8, bw, lh*8));
+            
             x = 0;
             y = Screen.height - lh;
             {
@@ -247,6 +247,8 @@ namespace dairin0d.Octree.Rendering {
                 GUI.Label(new Rect(x, y, Screen.width, lh), $"NodeCount={Splatter.NodeCount}");
                 y -= lh;
             }
+            
+            DrawBox(new Rect(Screen.width - bw, Screen.height-lh*8, bw, lh*8));
             
             x = Screen.width - bw;
             y = Screen.height - lh;
@@ -271,6 +273,12 @@ namespace dairin0d.Octree.Rendering {
                 
                 use_model = GUI.Toggle(new Rect(x, y, bw, lh), use_model, "Use model");
                 y -= lh;
+            }
+            
+            void DrawBox(Rect rect, int repeats=2) {
+                for (; repeats > 0; repeats--) {
+                    GUI.Box(rect, "");
+                }
             }
         }
         
@@ -443,6 +451,20 @@ namespace dairin0d.Octree.Rendering {
         }
         
         static RawOctree LoadPointCloud(string path, float voxel_size=-1) {
+            if (string.IsNullOrEmpty(path)) return null;
+            
+            string cached_path = path+".cache3";
+            if (File.Exists(cached_path)) {
+                if (!File.Exists(path)) {
+                    return LoadCached(cached_path);
+                }
+				if (File.GetLastWriteTime(cached_path) >= File.GetLastWriteTime(path)) {
+					return LoadCached(cached_path);
+				}
+            }
+            
+            if (!File.Exists(path)) return null;
+            
             var discretizer = new PointCloudDiscretizer();
             using (var pcr = new PointCloudFile.Reader(path)) {
                 Vector3 pos; Color32 color; Vector3 normal;
@@ -459,7 +481,88 @@ namespace dairin0d.Octree.Rendering {
                 node.data = voxinfo.color;
             }
             
-            return ConvertOctree(octree);
+            var converted = ConvertOctree(octree);
+            WriteCached(converted, cached_path);
+            return converted;
+        }
+        
+        static RawOctree LoadCached(string cached_path) {
+            try {
+                var octree = new RawOctree();
+                var stream = new FileStream(cached_path, FileMode.Open, FileAccess.Read);
+                var br = new BinaryReader(stream); {
+                    int node_count = br.ReadInt32();
+                    octree.root_node = br.ReadInt32();
+                    octree.root_color = ReadColor32(br);
+                    octree.nodes = ReadArray<int>(br, node_count << 3);
+                    octree.colors = ReadArray<Color32>(br, node_count << 3);
+                }
+                stream.Close();
+                stream.Dispose();
+    			Debug.Log("Cached version loaded: "+cached_path);
+                return octree;
+            } catch (System.Exception exc) {
+                Debug.LogException(exc);
+                return null;
+            }
+        }
+        
+        static void WriteCached(RawOctree octree, string cached_path) {
+			var stream = new FileStream(cached_path, FileMode.Create, FileAccess.Write);
+			var bw = new BinaryWriter(stream); {
+				bw.Write(octree.nodes.Length >> 3);
+                bw.Write(octree.root_node);
+                WriteColor32(bw, octree.root_color);
+                WriteArray(bw, octree.nodes);
+                WriteArray(bw, octree.colors);
+			}
+			bw.Flush();
+			stream.Flush();
+			stream.Close();
+			stream.Dispose();
+			Debug.Log("Cached version saved: "+cached_path);
+        }
+        
+        [StructLayout(LayoutKind.Explicit)]
+        struct Color32_int {
+            [FieldOffset(0)] public Color32 c;
+            [FieldOffset(0)] public int i;
+        }
+        static void WriteColor32(BinaryWriter bw, Color32 color) {
+            Color32_int color_int = default;
+            color_int.c = color;
+            bw.Write(color_int.i);
+        }
+        static Color32 ReadColor32(BinaryReader br) {
+            Color32_int color_int = default;
+            color_int.i = br.ReadInt32();
+            return color_int.c;
+        }
+        
+        unsafe static void WriteArray<T>(BinaryWriter bw, T[] array) where T : struct {
+            var bytes = new byte[array.Length * Marshal.SizeOf<T>()];
+            // System.Buffer.BlockCopy() only works for arrays of primitive types
+            fixed (byte* bytes_ptr = bytes)
+            {
+                GCHandle handle = GCHandle.Alloc(array, GCHandleType.Pinned);
+                var array_ptr = handle.AddrOfPinnedObject().ToPointer();
+                System.Buffer.MemoryCopy(array_ptr, bytes_ptr, bytes.Length, bytes.Length);
+                handle.Free();
+            }
+            bw.Write(bytes);
+        }
+        unsafe static T[] ReadArray<T>(BinaryReader br, int count) where T : struct {
+            var bytes = br.ReadBytes(count * Marshal.SizeOf<T>());
+            var array = new T[count];
+            // System.Buffer.BlockCopy() only works for arrays of primitive types
+            fixed (byte* bytes_ptr = bytes)
+            {
+                GCHandle handle = GCHandle.Alloc(array, GCHandleType.Pinned);
+                var array_ptr = handle.AddrOfPinnedObject().ToPointer();
+                System.Buffer.MemoryCopy(bytes_ptr, array_ptr, bytes.Length, bytes.Length);
+                handle.Free();
+            }
+            return array;
         }
         
         static RawOctree ConvertOctree(LeafOctree<Color32> octree) {
@@ -734,6 +837,7 @@ namespace dairin0d.Octree.Rendering {
                     stack->x1 = root.x1 - (ix << subpixel_shift);
                     stack->y1 = root.y1 - (iy << subpixel_shift);
                     stack->z = root.z;
+                    stack->color = color;
                     
                     Render(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack);
                 }
