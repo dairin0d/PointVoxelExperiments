@@ -407,8 +407,8 @@ namespace dairin0d.Octree.Rendering {
                             var colors_x = colors_y;
                             for (var tile_x = tile_y; tile_x != tile_end_x; ++tile_x, ++colors_x) {
                                 *colors_x = tile_x->color;
-                                int d = tile_x->depth >> depth_shift;
-                                colors_x->r = (byte)d;
+                                // int d = tile_x->depth >> depth_shift;
+                                // colors_x->r = (byte)d;
                             }
                         }
                     }
@@ -499,19 +499,20 @@ namespace dairin0d.Octree.Rendering {
                     colors[pos0|i] = subcolor;
                 }
                 
-                color.r += subnode.data.r;
-                color.g += subnode.data.g;
-                color.b += subnode.data.b;
-                color.a += subnode.data.a;
+                color.r += colors[pos0|i].r;
+                color.g += colors[pos0|i].g;
+                color.b += colors[pos0|i].b;
+                color.a += colors[pos0|i].a;
                 ++count;
             }
             
-            if (count > 0) {
-                color.r /= count;
-                color.g /= count;
-                color.b /= count;
-                color.a /= count;
-            }
+            if (count == 0) return (0, node.data);
+            
+            float color_scale = 1f / (count * 255);
+            color.r *= color_scale;
+            color.g *= color_scale;
+            color.b *= color_scale;
+            color.a *= color_scale;
             
             return (mask, color);
         }
@@ -615,6 +616,11 @@ namespace dairin0d.Octree.Rendering {
             public int x0, y0;
             public int x1, y1;
             public int z;
+            public Color32 color;
+            // public int dx0, x0, px0, x0b;
+            // public int dy0, y0, py0, y0b;
+            // public int dx1, x1, px1, x1b;
+            // public int dy1, y1, py1, y1b;
         }
         public StackEntry[] stack = new StackEntry[8*32];
         
@@ -729,13 +735,13 @@ namespace dairin0d.Octree.Rendering {
                     stack->y1 = root.y1 - (iy << subpixel_shift);
                     stack->z = root.z;
                     
-                    Render(tile, tw, th, tile_shift, color, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack);
+                    Render(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack);
                 }
             }
         }
         
         unsafe static void Render(Buffer.DataItem* tile, int w, int h, int tile_shift,
-            Color32 color, int* nodes, Color32* colors, int forward_key, int subpixel_shift,
+            int* nodes, Color32* colors, int forward_key, int subpixel_shift,
             uint* queues, Delta* deltas, StackEntry* stack)
         {
             // We need to put nodes on stack in back-to-front order
@@ -744,6 +750,7 @@ namespace dairin0d.Octree.Rendering {
             int tile_size = 1 << tile_shift;
             
             int max_level = (int)MaxLevel;
+            max_level = Mathf.Clamp(max_level, 0, 32);
             
             int stack_top = 0;
             
@@ -787,11 +794,11 @@ namespace dairin0d.Octree.Rendering {
                     var tile_x = tile + px0 + (py0 << tile_shift);
                     if (tile_x->depth > current->z) {
                         tile_x->depth = current->z;
-                        // tile_x->color = color;
-                        int a = tile_x->color.a + 32;
-                        tile_x->color.a = (byte)(a < 255 ? a : 255);
-                        tile_x->color.g = 0;
-                        tile_x->color.b = 255;
+                        tile_x->color = current->color;
+                        // int a = tile_x->color.a + 32;
+                        // tile_x->color.a = (byte)(a < 255 ? a : 255);
+                        // tile_x->color.g = 0;
+                        // tile_x->color.b = 255;
                     }
                     continue;
                 } else if ((current->level >= max_level) | ((pw <= StopAt) & (ph <= StopAt))) {
@@ -806,9 +813,9 @@ namespace dairin0d.Octree.Rendering {
                         for (; tile_x != tile_x_end; ++tile_x) {
                             if (tile_x->depth > current->z) {
                                 tile_x->depth = current->z;
-                                // tile_x->color = color;
-                                int a = tile_x->color.a + 32;
-                                tile_x->color.a = (byte)(a < 255 ? a : 255);
+                                tile_x->color = current->color;
+                                // int a = tile_x->color.a + 32;
+                                // tile_x->color.a = (byte)(a < 255 ? a : 255);
                             }
                         }
                     }
@@ -836,32 +843,14 @@ namespace dairin0d.Octree.Rendering {
                     goto occlusion_start;
                     occlusion_passed:
                     if (UseLast) current->last = ((int)(pixel - tile)) >> tile_shift;
-                    
-                    // var tile_y = tile + (py0 << tile_shift);
-                    // var tile_y_end = tile + (py1 << tile_shift);
-                    // for (; tile_y != tile_y_end; tile_y += tile_size) {
-                    //     var tile_x = tile_y + px0;
-                    //     var tile_x_end = tile_y + px1;
-                    //     for (; tile_x != tile_x_end; ++tile_x) {
-                    //         // tile_x->color = color;
-                    //         if (current->z < tile_x->depth) {
-                    //             // current->last = ((int)(tile_y - tile)) >> tile_shift;
-                    //             goto proceed;
-                    //         }
-                    //     }
-                    // }
-                    // ++OccludedCount;
-                    // continue;
-                    // proceed:;
-                    // if (UseLast) current->last = ((int)(tile_y - tile)) >> tile_shift;
                 }
                 
                 // Add subnodes to the stack
                 int mask = (current->node >> 24) & 0xFF;
-                int offset = current->node & 0xFFFFFF;
                 uint queue = queues[reverse_key | mask];
                 if (queue == 0) {
-                    queue = queues[reverse_key | 255];
+                    queue = queues[reverse_key | 255] & 0x0FFFFFFF;
+                    var color = current->color;
                     int x0 = current->x0, y0 = current->y0;
                     int x1 = current->x1, y1 = current->y1;
                     int z = current->z, last = current->last;
@@ -878,9 +867,12 @@ namespace dairin0d.Octree.Rendering {
                         stack->x1 = x1 - (delta->x1 >> level);
                         stack->y1 = y1 - (delta->y1 >> level);
                         stack->z = z + (delta->z >> level);
+                        stack->color = color;
                     }
                 } else {
-                    var node = nodes + (offset << 3);
+                    int offset = (current->node & 0xFFFFFF) << 3;
+                    var node = nodes + offset;
+                    var color = colors + offset;
                     int x0 = current->x0, y0 = current->y0;
                     int x1 = current->x1, y1 = current->y1;
                     int z = current->z, last = current->last;
@@ -897,6 +889,7 @@ namespace dairin0d.Octree.Rendering {
                         stack->x1 = x1 - (delta->x1 >> level);
                         stack->y1 = y1 - (delta->y1 >> level);
                         stack->z = z + (delta->z >> level);
+                        stack->color = color[octant];
                     }
                 }
             } while (stack_top >= 0);
