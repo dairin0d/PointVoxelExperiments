@@ -38,6 +38,7 @@ Branchless: 57-58-59
 PointerCastCopy: 55-57
 UnpackField: 50, 57
 UnpackMask: 52-53
+Map: 134
 
 Build - Mono:
 ManagedCopy: 40, 42-43
@@ -49,6 +50,7 @@ Branchless: 18-19
 PointerCastCopy: 40
 UnpackField: 29
 UnpackMask: 14-15, 19
+Map: 72
 
 Build - IL2CPP - Release:
 ManagedCopy: 22-24
@@ -60,6 +62,7 @@ Branchless: 17-18
 PointerCastCopy: 17-18
 UnpackField: 15-17, 24
 UnpackMask: 16
+Map: 15
 
 In Mono (or at least Editor), ((a - b) & ((a - b) >> 31)) is slightly
 faster than when storing the difference in a temporary variable.
@@ -110,489 +113,592 @@ NodeMinIfF: 54
 
 */
 
-public class PerformanceTests : MonoBehaviour {
-    System.Diagnostics.Stopwatch stopwatch;
-    
-    public int vSyncCount = 0;
-    public int targetFrameRate = 30;
-    
-    public int Count = 10000000;
-    public int Seed = 0;
-    
-    public int Threshold;
-    
-    enum TestMode {
-        ManagedCopy,
-        UnsafeCopy,
-        PointerCopy,
-        IfStatement,
-        IfExpression,
-        Branchless,
-        PointerCastCopy,
-        UnpackField,
-        UnpackMask,
-        ReadLocal,
-        ReadField,
-        // DeltaCenter,
-        // DeltaCenterC,
-        // DeltaMinMax,
-        NodeMin,
-        NodeMinB,
-        NodeMinC,
-        NodeMinD,
-        NodeMinLevel,
-        NodeMinNoShift,
-        NodeMinIf,
-        NodeMinIfB,
-        NodeMinIfC,
-        NodeMinIfD,
-        NodeMinIfE,
-        NodeMinIfF,
-    }
-    
-    TestMode[] test_modes;
-    int[] test_times;
-    
-    int[] arr1, arr2;
-    
-    struct TestStruct {
-        public short s0, s1;
-    }
-    
-    // struct DeltaCenter {
-    //     public int x, y, z;
-    //     // public int pad0;
-    // }
-    // struct DeltaMinMax {
-    //     public int x0, y0, z0;
-    //     public int x1, y1;
-    //     // public int pad0;
-    //     // public int pad1;
-    //     // public int pad2;
-    // }
-    
-    // DeltaCenter[] deltas_center = new DeltaCenter[8];
-    // DeltaMinMax[] deltas_minmax = new DeltaMinMax[8];
-    
-    struct StackItem {
-        public int dx0, x0, px0, x0b;
-        public int dy0, y0, py0, y0b;
-        public int dx1, x1, px1, x1b;
-        public int dy1, y1, py1, y1b;
-        public int last;
-        // public int t0, t1, t2;
-    }
-    StackItem[] stack_main = new StackItem[9];
-    
-    void Start() {
-        if (!Application.isEditor) Screen.SetResolution(640, 480, false);
+namespace dairin0d.Octree.Tests {
+    public class PerformanceTests : MonoBehaviour {
+        System.Diagnostics.Stopwatch stopwatch;
         
-        stopwatch = new System.Diagnostics.Stopwatch();
+        public int vSyncCount = 0;
+        public int targetFrameRate = 30;
         
-        test_modes = (TestMode[]) System.Enum.GetValues(typeof(TestMode));
-        test_times = new int[test_modes.Length];
+        public int Count = 10000000;
+        public int Seed = 0;
         
-        arr1 = new int[Count];
-        arr2 = new int[Count];
+        public int Threshold;
         
-        Random.InitState(Seed);
-        for (int i = 0; i < Count; i++) {
-            arr1[i] = Random.Range(short.MinValue, short.MaxValue);
+        enum TestMode {
+            ManagedCopy,
+            UnsafeCopy,
+            PointerCopy,
+            IfStatement,
+            IfExpression,
+            Branchless,
+            PointerCastCopy,
+            UnpackField,
+            UnpackMask,
+            ReadLocal,
+            ReadField,
+            // DeltaCenter,
+            // DeltaCenterC,
+            // DeltaMinMax,
+            NodeMin,
+            NodeMinB,
+            NodeMinC,
+            NodeMinD,
+            NodeMinLevel,
+            NodeMinNoShift,
+            NodeMinIf,
+            NodeMinIfB,
+            NodeMinIfC,
+            NodeMinIfD,
+            NodeMinIfE,
+            NodeMinIfF,
+            Map,
         }
         
-        int subpixel_shift = 8;
-        int w = 640, h = 480;
-        for (int i = 0; i < stack_main.Length; i++) {
-            var item = stack_main[i];
-            item.x0 = Random.Range(-1, 0) << subpixel_shift;
-            item.y0 = Random.Range(-1, 0) << subpixel_shift;
-            item.x1 = Random.Range(w, w+1) << subpixel_shift;
-            item.y1 = Random.Range(h, h+1) << subpixel_shift;
-            item.x0b = 0;
-            item.y0b = 0;
-            item.x1b = w;
-            item.y1b = h;
-            stack_main[i] = item;
+        TestMode[] test_modes;
+        int[] test_times;
+        
+        int[] arr1, arr2;
+        
+        struct TestStruct {
+            public short s0, s1;
         }
-    }
+        
+        // struct DeltaCenter {
+        //     public int x, y, z;
+        //     // public int pad0;
+        // }
+        // struct DeltaMinMax {
+        //     public int x0, y0, z0;
+        //     public int x1, y1;
+        //     // public int pad0;
+        //     // public int pad1;
+        //     // public int pad2;
+        // }
+        
+        // DeltaCenter[] deltas_center = new DeltaCenter[8];
+        // DeltaMinMax[] deltas_minmax = new DeltaMinMax[8];
+        
+        struct StackItem {
+            public int dx0, x0, px0, x0b;
+            public int dy0, y0, py0, y0b;
+            public int dx1, x1, px1, x1b;
+            public int dy1, y1, py1, y1b;
+            public int last;
+            // public int t0, t1, t2;
+        }
+        StackItem[] stack_main = new StackItem[9];
+        
+        int[] map = new int[64];
+        
+        void Start() {
+            if (!Application.isEditor) Screen.SetResolution(640, 480, false);
+            
+            stopwatch = new System.Diagnostics.Stopwatch();
+            
+            test_modes = (TestMode[]) System.Enum.GetValues(typeof(TestMode));
+            test_times = new int[test_modes.Length];
+            
+            arr1 = new int[Count];
+            arr2 = new int[Count];
+            
+            Random.InitState(Seed);
+            for (int i = 0; i < Count; i++) {
+                arr1[i] = Random.Range(short.MinValue, short.MaxValue);
+            }
+            
+            int subpixel_shift = 8;
+            int w = 640, h = 480;
+            for (int i = 0; i < stack_main.Length; i++) {
+                var item = stack_main[i];
+                item.x0 = Random.Range(-1, 0) << subpixel_shift;
+                item.y0 = Random.Range(-1, 0) << subpixel_shift;
+                item.x1 = Random.Range(w, w+1) << subpixel_shift;
+                item.y1 = Random.Range(h, h+1) << subpixel_shift;
+                item.x0b = 0;
+                item.y0b = 0;
+                item.x1b = w;
+                item.y1b = h;
+                stack_main[i] = item;
+            }
+            
+            for (int i = 0; i < map.Length; i++) {
+                map[i] = Random.Range(1, 255) | 0xFFFF00;
+            }
+        }
 
-    void Update() {
-        QualitySettings.vSyncCount = vSyncCount;
-        Application.targetFrameRate = targetFrameRate;
-    }
-    
-	void OnGUI() {
-        float x = 0, y = 0, btn_w = 160, screen_w = Screen.width, line_h = 20;
-        GUI.Label(new Rect(x, y, screen_w, line_h), $"Count = {Count}");
-        y += line_h;
-        for (int test_index = 0; test_index < test_times.Length; test_index++) {
-            var test_mode = test_modes[test_index];
-            var test_time = test_times[test_index];
-            if (GUI.Button(new Rect(x, y, btn_w, line_h), $"{test_mode}: {test_time}")) Test(test_index);
+        void Update() {
+            QualitySettings.vSyncCount = vSyncCount;
+            Application.targetFrameRate = targetFrameRate;
+        }
+        
+        void OnGUI() {
+            float x = 0, y = 0, btn_w = 160, screen_w = Screen.width, line_h = 20;
+            GUI.Label(new Rect(x, y, screen_w, line_h), $"Count = {Count}");
             y += line_h;
-            if (y > (Screen.height-line_h)) { y = 0; x += btn_w; }
+            for (int test_index = 0; test_index < test_times.Length; test_index++) {
+                var test_mode = test_modes[test_index];
+                var test_time = test_times[test_index];
+                if (GUI.Button(new Rect(x, y, btn_w, line_h), $"{test_mode}: {test_time}")) Test(test_index);
+                y += line_h;
+                if (y > (Screen.height-line_h)) { y = 0; x += btn_w; }
+            }
         }
-	}
-    
-    unsafe void Test(int test_index, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
-        var test_mode = test_modes[test_index];
-        fixed (int* _ptr1 = arr1, _ptr2 = arr2) {
-            int* ptr1 = _ptr1;
-            int* ptr2 = _ptr2;
-            int* ptr1_end = ptr1 + arr1.Length;
-            if (test_mode == TestMode.ManagedCopy) {
-                stopwatch.Restart();
-                for (int i = 0; i < arr1.Length; i++) {
-                    arr2[i] = arr1[i];
+        
+        unsafe void Test(int test_index, int x0b=0, int y0b=0, int x1b=640, int y1b=480, int forward_key=0, int mask=255) {
+            var test_mode = test_modes[test_index];
+            fixed (int* _ptr1 = arr1, _ptr2 = arr2) {
+                int* ptr1 = _ptr1;
+                int* ptr2 = _ptr2;
+                int* ptr1_end = ptr1 + arr1.Length;
+                if (test_mode == TestMode.ManagedCopy) {
+                    stopwatch.Restart();
+                    for (int i = 0; i < arr1.Length; i++) {
+                        arr2[i] = arr1[i];
+                    }
+                } else if (test_mode == TestMode.UnsafeCopy) {
+                    stopwatch.Restart();
+                    for (int i = 0; i < arr1.Length; i++) {
+                        ptr2[i] = ptr1[i];
+                    }
+                } else if (test_mode == TestMode.PointerCopy) {
+                    for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
+                        *ptr2 = *ptr1;
+                    }
+                } else if (test_mode == TestMode.IfStatement) {
+                    int threshold = Threshold;
+                    for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
+                        *ptr2 = *ptr1;
+                        if (*ptr2 < threshold) *ptr2 = threshold;
+                    }
+                } else if (test_mode == TestMode.IfExpression) {
+                    int threshold = Threshold;
+                    for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
+                        *ptr2 = (*ptr1 < threshold ? threshold : *ptr1);
+                    }
+                } else if (test_mode == TestMode.Branchless) {
+                    int threshold = Threshold;
+                    for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
+                        *ptr2 = *ptr1 - ((*ptr1 - threshold) & ((*ptr1 - threshold) >> 31));
+                    }
+                } else if (test_mode == TestMode.PointerCastCopy) {
+                    byte* ptr1b = (byte*)ptr1;
+                    byte* ptr2b = (byte*)ptr2;
+                    byte* ptr1b_end = (byte*)ptr1_end;
+                    for (stopwatch.Restart(); ptr1b != ptr1b_end; ptr1b += 4, ptr2b += 4) {
+                        *((int*)ptr2b) = *((int*)ptr1b);
+                    }
+                } else if (test_mode == TestMode.UnpackField) {
+                    TestStruct* fptr1 = (TestStruct*)ptr1;
+                    TestStruct* fptr1_end = (TestStruct*)ptr1_end;
+                    for (stopwatch.Restart(); fptr1 != fptr1_end; ++fptr1, ++ptr2) {
+                        *ptr2 = fptr1->s0;
+                    }
+                } else if (test_mode == TestMode.UnpackMask) {
+                    for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
+                        *ptr2 = (*ptr1) & 0xFFFF;
+                    }
+                } else if (test_mode == TestMode.ReadLocal) {
+                    int value = targetFrameRate + 1;
+                    for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
+                        *ptr2 = value;
+                    }
+                } else if (test_mode == TestMode.ReadField) {
+                    for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
+                        *ptr2 = targetFrameRate;
+                    }
+                // } else if (test_mode == TestMode.DeltaCenter) {
+                //     int radius = 10;
+                //     fixed (DeltaCenter* deltas = deltas_center) {
+                //         for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
+                //             var delta = (deltas + (*ptr1 & 7));
+                //             int min = *ptr1 + delta->x - radius;
+                //             int max = *ptr1 + delta->x + radius;
+                //             *ptr2 = min + max;
+                //         }
+                //     }
+                // } else if (test_mode == TestMode.DeltaCenterC) {
+                //     int radius = 10;
+                //     fixed (DeltaCenter* deltas = deltas_center) {
+                //         for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
+                //             var delta = (deltas + (*ptr1 & 7));
+                //             int center = *ptr1 + delta->x;
+                //             int min = center - radius;
+                //             int max = center + radius;
+                //             *ptr2 = min + max;
+                //         }
+                //     }
+                // } else if (test_mode == TestMode.DeltaMinMax) {
+                //     fixed (DeltaMinMax* deltas = deltas_minmax) {
+                //         for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
+                //             var delta = (deltas + (*ptr1 & 7));
+                //             int min = *ptr1 + delta->x0;
+                //             int max = *ptr1 + delta->x1;
+                //             *ptr2 = min + max;
+                //         }
+                //     }
+                } else if (test_mode == TestMode.NodeMin) {
+                    test_NodeMin(ptr1, ptr2, ptr1_end);
+                } else if (test_mode == TestMode.NodeMinB) {
+                    test_NodeMinB(ptr1, ptr2, ptr1_end);
+                } else if (test_mode == TestMode.NodeMinC) {
+                    test_NodeMinC(ptr1, ptr2, ptr1_end);
+                } else if (test_mode == TestMode.NodeMinD) {
+                    test_NodeMinD(ptr1, ptr2, ptr1_end);
+                } else if (test_mode == TestMode.NodeMinLevel) {
+                    test_NodeMinLevel(ptr1, ptr2, ptr1_end);
+                } else if (test_mode == TestMode.NodeMinNoShift) {
+                    test_NodeMinNoShift(ptr1, ptr2, ptr1_end);
+                } else if (test_mode == TestMode.NodeMinIf) {
+                    test_NodeMinIf(ptr1, ptr2, ptr1_end);
+                } else if (test_mode == TestMode.NodeMinIfB) {
+                    test_NodeMinIfB(ptr1, ptr2, ptr1_end);
+                } else if (test_mode == TestMode.NodeMinIfC) {
+                    test_NodeMinIfC(ptr1, ptr2, ptr1_end);
+                } else if (test_mode == TestMode.NodeMinIfD) {
+                    test_NodeMinIfD(ptr1, ptr2, ptr1_end);
+                } else if (test_mode == TestMode.NodeMinIfE) {
+                    test_NodeMinIfE(ptr1, ptr2, ptr1_end);
+                } else if (test_mode == TestMode.NodeMinIfF) {
+                    test_NodeMinIfF(ptr1, ptr2, ptr1_end);
+                } else if (test_mode == TestMode.Map) {
+                    int count = Count;
+                    int keymask = forward_key | mask;
+                    fixed (int* map_ptr = map)
+                    fixed (uint* queues = OctantOrder.Queues)
+                    {
+                        stopwatch.Restart();
+                        for (int i = 0; i < count; ++i, ++ptr2) {
+                            uint queue = queues[keymask & map_ptr[i & 3]];
+                            if (queue != 0) *ptr2 = ptr1[queue & 7];
+                        }
+                    }
                 }
-            } else if (test_mode == TestMode.UnsafeCopy) {
-                stopwatch.Restart();
-                for (int i = 0; i < arr1.Length; i++) {
-                    ptr2[i] = ptr1[i];
+                stopwatch.Stop();
+                test_times[test_index] = (int)stopwatch.ElapsedMilliseconds;
+            }
+        }
+        
+        unsafe void test_NodeMin(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
+            int w = x1b, h = y1b;
+            fixed (StackItem* stack = stack_main) {
+                var stack0 = stack + 8;
+                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
+                    var current = (stack + (*ptr1 & 7));
+                    current->x0 = stack0->x0 + current->dx0;
+                    current->px0 = current->x0 >> subpixel_shift;
+                    current->px0 = current->px0 - ((current->px0 - 0) & ((current->px0 - 0) >> 31));
+                    // current->px0 = current->px0 - ((current->px0 - stack0->last) & ((current->px0 - stack0->last) >> 31)); // Editor: 308-310
+                    current->y0 = stack0->y0 + current->dy0;
+                    current->py0 = current->y0 >> subpixel_shift;
+                    // current->py0 = current->py0 - ((current->py0 - 0) & ((current->py0 - 0) >> 31)); // Editor: 291-293
+                    current->py0 = current->py0 - ((current->py0 - stack0->last) & ((current->py0 - stack0->last) >> 31));
+                    current->x1 = stack0->x1 + current->dx1;
+                    current->px1 = current->x1 >> subpixel_shift;
+                    current->px1 = current->px1 + ((w - current->px1) & ((w - current->px1) >> 31));
+                    current->y1 = stack0->y1 + current->dy1;
+                    current->py1 = current->y1 >> subpixel_shift;
+                    current->py1 = current->py1 + ((h - current->py1) & ((h - current->py1) >> 31));
                 }
-            } else if (test_mode == TestMode.PointerCopy) {
-                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
-                    *ptr2 = *ptr1;
+            }
+        }
+        
+        unsafe void test_NodeMinB(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
+            fixed (StackItem* stack = stack_main) {
+                var stack0 = stack + 8;
+                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
+                    var current = (stack + (*ptr1 & 7));
+                    current->x0 = stack0->x0 + current->dx0;
+                    current->px0 = (current->x0 & ~(current->x0 >> 31)) >> subpixel_shift;
+                    current->y0 = stack0->y0 + current->dy0;
+                    current->py0 = (current->y0 & ~(current->y0 >> 31)) >> subpixel_shift;
+                    current->x1 = stack0->x1 + current->dx1;
+                    current->px1 = (current->x1 & ~(current->x1 >> 31)) >> subpixel_shift;
+                    current->y1 = stack0->y1 + current->dy1;
+                    current->py1 = (current->y1 & ~(current->y1 >> 31)) >> subpixel_shift;
                 }
-            } else if (test_mode == TestMode.IfStatement) {
-                int threshold = Threshold;
-                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
-                    *ptr2 = *ptr1;
-                    if (*ptr2 < threshold) *ptr2 = threshold;
+            }
+        }
+        
+        unsafe void test_NodeMinC(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
+            fixed (StackItem* stack = stack_main) {
+                var stack0 = stack + 8;
+                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
+                    var current = (stack + (*ptr1 & 7));
+                    current->x0 = stack0->x0 + current->dx0;
+                    current->y0 = stack0->y0 + current->dy0;
+                    current->x1 = stack0->x1 + current->dx1;
+                    current->y1 = stack0->y1 + current->dy1;
+                    current->px0 = (current->x0 & ~(current->x0 >> 31)) >> subpixel_shift;
+                    current->py0 = (current->y0 & ~(current->y0 >> 31)) >> subpixel_shift;
+                    current->px1 = (current->x1 & ~(current->x1 >> 31)) >> subpixel_shift;
+                    current->py1 = (current->y1 & ~(current->y1 >> 31)) >> subpixel_shift;
                 }
-            } else if (test_mode == TestMode.IfExpression) {
-                int threshold = Threshold;
-                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
-                    *ptr2 = (*ptr1 < threshold ? threshold : *ptr1);
+            }
+        }
+        
+        unsafe void test_NodeMinD(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
+            int w = x1b, h = y1b;
+            fixed (StackItem* stack = stack_main) {
+                var stack0 = stack + 8;
+                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
+                    var current = (stack + (*ptr1 & 7));
+                    current->x0 = stack0->x0 + current->dx0;
+                    current->px0 = (current->x0 & ~(current->x0 >> 31)) >> subpixel_shift;
+                    current->y0 = stack0->y0 + current->dy0;
+                    current->py0 = current->y0 >> subpixel_shift;
+                    current->py0 -= ((current->py0 - stack0->last) & ((current->py0 - stack0->last) >> 31));
+                    current->x1 = stack0->x1 + current->dx1;
+                    current->px1 = w - ((current->x1 & ~(current->x1 >> 31)) >> subpixel_shift);
+                    current->y1 = stack0->y1 + current->dy1;
+                    current->py1 = h - ((current->y1 & ~(current->y1 >> 31)) >> subpixel_shift);
                 }
-            } else if (test_mode == TestMode.Branchless) {
-                int threshold = Threshold;
-                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
-                    *ptr2 = *ptr1 - ((*ptr1 - threshold) & ((*ptr1 - threshold) >> 31));
+            }
+        }
+        
+        unsafe void test_NodeMinLevel(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
+            int w = x1b, h = y1b;
+            int level = 2;
+            fixed (StackItem* stack = stack_main) {
+                var stack0 = stack + 8;
+                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
+                    var current = (stack + (*ptr1 & 7));
+                    current->x0 = stack0->x0 + (current->dx0 >> level);
+                    current->px0 = current->x0 >> subpixel_shift;
+                    current->px0 = current->px0 - ((current->px0 - 0) & ((current->px0 - 0) >> 31));
+                    current->y0 = stack0->y0 + (current->dy0 >> level);
+                    current->py0 = current->y0 >> subpixel_shift;
+                    current->py0 = current->py0 - ((current->py0 - stack0->last) & ((current->py0 - stack0->last) >> 31));
+                    current->x1 = stack0->x1 + (current->dx1 >> level);
+                    current->px1 = current->x1 >> subpixel_shift;
+                    current->px1 = current->px1 + ((w - current->px1) & ((w - current->px1) >> 31));
+                    current->y1 = stack0->y1 + (current->dy1 >> level);
+                    current->py1 = current->y1 >> subpixel_shift;
+                    current->py1 = current->py1 + ((h - current->py1) & ((h - current->py1) >> 31));
                 }
-            } else if (test_mode == TestMode.PointerCastCopy) {
-                byte* ptr1b = (byte*)ptr1;
-                byte* ptr2b = (byte*)ptr2;
-                byte* ptr1b_end = (byte*)ptr1_end;
-                for (stopwatch.Restart(); ptr1b != ptr1b_end; ptr1b += 4, ptr2b += 4) {
-                    *((int*)ptr2b) = *((int*)ptr1b);
+            }
+        }
+        
+        unsafe void test_NodeMinNoShift(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
+            int w = x1b, h = y1b;
+            fixed (StackItem* stack = stack_main) {
+                var stack0 = stack + 8;
+                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
+                    var current = (stack + (*ptr1 & 7));
+                    current->x0 = stack0->x0 + current->dx0;
+                    current->px0 = current->x0 - ((current->x0 - 0) & ((current->x0 - 0) >> 31));
+                    current->y0 = stack0->y0 + current->dy0;
+                    current->py0 = current->y0 - ((current->y0 - stack0->last) & ((current->y0 - stack0->last) >> 31));
+                    current->x1 = stack0->x1 + current->dx1;
+                    current->px1 = current->x1 + ((w - current->x1) & ((w - current->x1) >> 31));
+                    current->y1 = stack0->y1 + current->dy1;
+                    current->py1 = current->y1 + ((h - current->y1) & ((h - current->y1) >> 31));
                 }
-            } else if (test_mode == TestMode.UnpackField) {
-                TestStruct* fptr1 = (TestStruct*)ptr1;
-                TestStruct* fptr1_end = (TestStruct*)ptr1_end;
-                for (stopwatch.Restart(); fptr1 != fptr1_end; ++fptr1, ++ptr2) {
-                    *ptr2 = fptr1->s0;
+            }
+        }
+        
+        unsafe void test_NodeMinIf(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
+            int w = x1b, h = y1b;
+            fixed (StackItem* stack = stack_main) {
+                var stack0 = stack + 8;
+                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
+                    var current = (stack + (*ptr1 & 7));
+                    current->x0 = stack0->x0 + current->dx0;
+                    current->px0 = current->x0 >> subpixel_shift;
+                    if (current->px0 < 0) current->px0 = 0;
+                    current->y0 = stack0->y0 + current->dy0;
+                    current->py0 = current->y0 >> subpixel_shift;
+                    if (current->py0 < stack0->last) current->py0 = stack0->last;
+                    current->x1 = stack0->x1 + current->dx1;
+                    current->px1 = current->x1 >> subpixel_shift;
+                    if (current->px1 > w) current->px1 = w;
+                    current->y1 = stack0->y1 + current->dy1;
+                    current->py1 = current->y1 >> subpixel_shift;
+                    if (current->py1 > h) current->py1 = h;
                 }
-            } else if (test_mode == TestMode.UnpackMask) {
-                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
-                    *ptr2 = (*ptr1) & 0xFFFF;
+            }
+        }
+        
+        unsafe void test_NodeMinIfB(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
+            fixed (StackItem* stack = stack_main) {
+                var stack0 = stack + 8;
+                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
+                    var current = (stack + (*ptr1 & 7));
+                    current->x0 = stack0->x0 + current->dx0;
+                    current->px0 = current->x0 >> subpixel_shift;
+                    if (current->px0 < stack0->x0b) current->px0 = stack0->x0b;
+                    current->y0 = stack0->y0 + current->dy0;
+                    current->py0 = current->y0 >> subpixel_shift;
+                    if (current->py0 < stack0->y0b) current->py0 = stack0->y0b;
+                    current->x1 = stack0->x1 + current->dx1;
+                    current->px1 = current->x1 >> subpixel_shift;
+                    if (current->px1 > stack0->x1b) current->px1 = stack0->x1b;
+                    current->y1 = stack0->y1 + current->dy1;
+                    current->py1 = current->y1 >> subpixel_shift;
+                    if (current->py1 > stack0->y1b) current->py1 = stack0->y1b;
                 }
-            } else if (test_mode == TestMode.ReadLocal) {
-                int value = targetFrameRate + 1;
-                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
-                    *ptr2 = value;
+            }
+        }
+        
+        unsafe void test_NodeMinIfC(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
+            fixed (StackItem* stack = stack_main) {
+                var stack0 = stack + 8;
+                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
+                    var current = (stack + (*ptr1 & 7));
+                    current->x0 = stack0->x0 + current->dx0;
+                    current->px0 = current->x0 >> subpixel_shift;
+                    if (current->px0 < x0b) current->px0 = x0b;
+                    current->y0 = stack0->y0 + current->dy0;
+                    current->py0 = current->y0 >> subpixel_shift;
+                    if (current->py0 < y0b) current->py0 = y0b;
+                    current->x1 = stack0->x1 + current->dx1;
+                    current->px1 = current->x1 >> subpixel_shift;
+                    if (current->px1 > x1b) current->px1 = x1b;
+                    current->y1 = stack0->y1 + current->dy1;
+                    current->py1 = current->y1 >> subpixel_shift;
+                    if (current->py1 > y1b) current->py1 = y1b;
                 }
-            } else if (test_mode == TestMode.ReadField) {
-                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
-                    *ptr2 = targetFrameRate;
+            }
+        }
+        
+        unsafe void test_NodeMinIfD(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
+            int w = x1b, h = y1b;
+            fixed (StackItem* stack = stack_main) {
+                var stack0 = stack + 8;
+                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
+                    var current = (stack + (*ptr1 & 7));
+                    current->px0 = current->x0 = stack0->x0 + current->dx0;
+                    if (current->px0 < 0) current->px0 = 0;
+                    current->py0 = current->y0 = stack0->y0 + current->dy0;
+                    if (current->py0 < stack0->last) current->py0 = stack0->last;
+                    current->px1 = current->x1 = stack0->x1 + current->dx1;
+                    if (current->px1 > w) current->px1 = w;
+                    current->py1 = current->y1 = stack0->y1 + current->dy1;
+                    if (current->py1 > h) current->py1 = h;
                 }
-            // } else if (test_mode == TestMode.DeltaCenter) {
-            //     int radius = 10;
-            //     fixed (DeltaCenter* deltas = deltas_center) {
-            //         for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
-            //             var delta = (deltas + (*ptr1 & 7));
-            //             int min = *ptr1 + delta->x - radius;
-            //             int max = *ptr1 + delta->x + radius;
-            //             *ptr2 = min + max;
-            //         }
-            //     }
-            // } else if (test_mode == TestMode.DeltaCenterC) {
-            //     int radius = 10;
-            //     fixed (DeltaCenter* deltas = deltas_center) {
-            //         for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
-            //             var delta = (deltas + (*ptr1 & 7));
-            //             int center = *ptr1 + delta->x;
-            //             int min = center - radius;
-            //             int max = center + radius;
-            //             *ptr2 = min + max;
-            //         }
-            //     }
-            // } else if (test_mode == TestMode.DeltaMinMax) {
-            //     fixed (DeltaMinMax* deltas = deltas_minmax) {
-            //         for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
-            //             var delta = (deltas + (*ptr1 & 7));
-            //             int min = *ptr1 + delta->x0;
-            //             int max = *ptr1 + delta->x1;
-            //             *ptr2 = min + max;
-            //         }
-            //     }
-            } else if (test_mode == TestMode.NodeMin) {
-                test_NodeMin(ptr1, ptr2, ptr1_end);
-            } else if (test_mode == TestMode.NodeMinB) {
-                test_NodeMinB(ptr1, ptr2, ptr1_end);
-            } else if (test_mode == TestMode.NodeMinC) {
-                test_NodeMinC(ptr1, ptr2, ptr1_end);
-            } else if (test_mode == TestMode.NodeMinD) {
-                test_NodeMinD(ptr1, ptr2, ptr1_end);
-            } else if (test_mode == TestMode.NodeMinLevel) {
-                test_NodeMinLevel(ptr1, ptr2, ptr1_end);
-            } else if (test_mode == TestMode.NodeMinNoShift) {
-                test_NodeMinNoShift(ptr1, ptr2, ptr1_end);
-            } else if (test_mode == TestMode.NodeMinIf) {
-                test_NodeMinIf(ptr1, ptr2, ptr1_end);
-            } else if (test_mode == TestMode.NodeMinIfB) {
-                test_NodeMinIfB(ptr1, ptr2, ptr1_end);
-            } else if (test_mode == TestMode.NodeMinIfC) {
-                test_NodeMinIfC(ptr1, ptr2, ptr1_end);
-            } else if (test_mode == TestMode.NodeMinIfD) {
-                test_NodeMinIfD(ptr1, ptr2, ptr1_end);
-            } else if (test_mode == TestMode.NodeMinIfE) {
-                test_NodeMinIfE(ptr1, ptr2, ptr1_end);
-            } else if (test_mode == TestMode.NodeMinIfF) {
-                test_NodeMinIfF(ptr1, ptr2, ptr1_end);
             }
-            stopwatch.Stop();
-            test_times[test_index] = (int)stopwatch.ElapsedMilliseconds;
         }
-    }
-    
-    unsafe void test_NodeMin(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
-        int w = x1b, h = y1b;
-        fixed (StackItem* stack = stack_main) {
-            var stack0 = stack + 8;
-            for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
-                var current = (stack + (*ptr1 & 7));
-                current->x0 = stack0->x0 + current->dx0;
-                current->px0 = current->x0 >> subpixel_shift;
-                current->px0 = current->px0 - ((current->px0 - 0) & ((current->px0 - 0) >> 31));
-                // current->px0 = current->px0 - ((current->px0 - stack0->last) & ((current->px0 - stack0->last) >> 31)); // Editor: 308-310
-                current->y0 = stack0->y0 + current->dy0;
-                current->py0 = current->y0 >> subpixel_shift;
-                // current->py0 = current->py0 - ((current->py0 - 0) & ((current->py0 - 0) >> 31)); // Editor: 291-293
-                current->py0 = current->py0 - ((current->py0 - stack0->last) & ((current->py0 - stack0->last) >> 31));
-                current->x1 = stack0->x1 + current->dx1;
-                current->px1 = current->x1 >> subpixel_shift;
-                current->px1 = current->px1 + ((w - current->px1) & ((w - current->px1) >> 31));
-                current->y1 = stack0->y1 + current->dy1;
-                current->py1 = current->y1 >> subpixel_shift;
-                current->py1 = current->py1 + ((h - current->py1) & ((h - current->py1) >> 31));
+        
+        unsafe void test_NodeMinIfE(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
+            int w = x1b, h = y1b;
+            fixed (StackItem* stack = stack_main) {
+                var stack0 = stack + 8;
+                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
+                    var current = (stack + (*ptr1 & 7));
+                    current->px0 = current->x0 = stack0->x0 + current->dx0;
+                    current->py0 = current->y0 = stack0->y0 + current->dy0;
+                    current->px1 = current->x1 = stack0->x1 + current->dx1;
+                    current->py1 = current->y1 = stack0->y1 + current->dy1;
+                    if (current->px0 < 0) current->px0 = 0;
+                    if (current->py0 < stack0->last) current->py0 = stack0->last;
+                    if (current->px1 > w) current->px1 = w;
+                    if (current->py1 > h) current->py1 = h;
+                }
+            }
+        }
+        
+        unsafe void test_NodeMinIfF(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
+            int w = x1b, h = y1b;
+            fixed (StackItem* stack = stack_main) {
+                var stack0 = stack + 8;
+                for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
+                    var current = (stack + (*ptr1 & 7));
+                    current->x0 = stack0->x0 + current->dx0;
+                    current->px0 = current->x0;
+                    if (current->px0 < 0) current->px0 = 0;
+                    current->y0 = stack0->y0 + current->dy0;
+                    current->py0 = current->y0;
+                    if (current->py0 < stack0->last) current->py0 = stack0->last;
+                    current->x1 = stack0->x1 + current->dx1;
+                    current->px1 = current->x1;
+                    if (current->px1 > w) current->px1 = w;
+                    current->y1 = stack0->y1 + current->dy1;
+                    current->py1 = current->y1;
+                    if (current->py1 > h) current->py1 = h;
+                }
             }
         }
     }
     
-    unsafe void test_NodeMinB(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
-        fixed (StackItem* stack = stack_main) {
-            var stack0 = stack + 8;
-            for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
-                var current = (stack + (*ptr1 & 7));
-                current->x0 = stack0->x0 + current->dx0;
-                current->px0 = (current->x0 & ~(current->x0 >> 31)) >> subpixel_shift;
-                current->y0 = stack0->y0 + current->dy0;
-                current->py0 = (current->y0 & ~(current->y0 >> 31)) >> subpixel_shift;
-                current->x1 = stack0->x1 + current->dx1;
-                current->px1 = (current->x1 & ~(current->x1 >> 31)) >> subpixel_shift;
-                current->y1 = stack0->y1 + current->dy1;
-                current->py1 = (current->y1 & ~(current->y1 >> 31)) >> subpixel_shift;
+    static class OctantOrder {
+        // Node traversal order and traversal state can be combined into a
+        // bit-string "queue" of octant indices (can also take into account
+        // different number of stored octants). When a node is "dequeued",
+        // the bit-string shifts by 4 bits. 3 bits for octant index,
+        // 1 bit for signifying that this is the last octant.
+        
+        public const int XYZ=0, XZY=1, YXZ=2, YZX=3, ZXY=4, ZYX=5;
+        
+        static uint[] queues = null;
+        public static uint[] Queues => queues ?? MakeQueues();
+        
+        public static int Key(ref Matrix4x4 matrix) {
+            return ((Order(ref matrix) << 3) | Octant(ref matrix)) << 8;
+        }
+        
+        public static int Octant(ref Matrix4x4 matrix) {
+            // Here we check which side of YZ/XZ/XY planes the view vector belongs to
+            // This is specific to Unity's coordinate system (X right, Y up, Z forward)
+            int bit_x = (matrix.m11 * matrix.m02 <= matrix.m01 * matrix.m12 ? 0 : 1); // Y.y * Z.x <= Y.x * Z.y
+            int bit_y = (matrix.m12 * matrix.m00 <= matrix.m02 * matrix.m10 ? 0 : 2); // Z.y * X.x <= Z.x * X.y
+            int bit_z = (matrix.m10 * matrix.m01 <= matrix.m00 * matrix.m11 ? 0 : 4); // X.y * Y.x <= X.x * Y.y
+            return bit_x | bit_y | bit_z;
+        }
+        
+        public static int Order(ref Matrix4x4 matrix) {
+            return Order(matrix.m20, matrix.m21, matrix.m22);
+        }
+        public static int Order(float x_z, float y_z, float z_z) {
+            if (x_z < 0f) x_z = -x_z;
+            if (y_z < 0f) y_z = -y_z;
+            if (z_z < 0f) z_z = -z_z;
+            if (x_z <= y_z) {
+                return (x_z <= z_z ? (y_z <= z_z ? XYZ : XZY) : ZXY);
+            } else {
+                return (y_z <= z_z ? (x_z <= z_z ? YXZ : YZX) : ZYX);
             }
         }
-    }
-    
-    unsafe void test_NodeMinC(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
-        fixed (StackItem* stack = stack_main) {
-            var stack0 = stack + 8;
-            for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
-                var current = (stack + (*ptr1 & 7));
-                current->x0 = stack0->x0 + current->dx0;
-                current->y0 = stack0->y0 + current->dy0;
-                current->x1 = stack0->x1 + current->dx1;
-                current->y1 = stack0->y1 + current->dy1;
-                current->px0 = (current->x0 & ~(current->x0 >> 31)) >> subpixel_shift;
-                current->py0 = (current->y0 & ~(current->y0 >> 31)) >> subpixel_shift;
-                current->px1 = (current->x1 & ~(current->x1 >> 31)) >> subpixel_shift;
-                current->py1 = (current->y1 & ~(current->y1 >> 31)) >> subpixel_shift;
+        
+        static uint[] MakeQueues() {
+            if (queues == null) {
+                queues = new uint[6*8*256];
+                for (int order = 0; order < 6; order++) {
+                    for (int octant = 0; octant < 8; octant++) {
+                        for (int mask = 0; mask < 256; mask++) {
+                            queues[(((order << 3) | octant) << 8) | mask] = MakeQueue(octant, order, mask);
+                        }
+                    }
+                }
             }
+            return queues;
         }
-    }
-    
-    unsafe void test_NodeMinD(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
-        int w = x1b, h = y1b;
-        fixed (StackItem* stack = stack_main) {
-            var stack0 = stack + 8;
-            for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
-                var current = (stack + (*ptr1 & 7));
-                current->x0 = stack0->x0 + current->dx0;
-                current->px0 = (current->x0 & ~(current->x0 >> 31)) >> subpixel_shift;
-                current->y0 = stack0->y0 + current->dy0;
-                current->py0 = current->y0 >> subpixel_shift;
-                current->py0 -= ((current->py0 - stack0->last) & ((current->py0 - stack0->last) >> 31));
-                current->x1 = stack0->x1 + current->dx1;
-                current->px1 = w - ((current->x1 & ~(current->x1 >> 31)) >> subpixel_shift);
-                current->y1 = stack0->y1 + current->dy1;
-                current->py1 = h - ((current->y1 & ~(current->y1 >> 31)) >> subpixel_shift);
+        
+        static uint MakeQueue(int start, int order, int mask) {
+            int _u = 0, _v = 0, _w = 0;
+            switch (order) {
+            case XYZ: _u = 0; _v = 1; _w = 2; break;
+            case XZY: _u = 0; _v = 2; _w = 1; break;
+            case YXZ: _u = 1; _v = 0; _w = 2; break;
+            case YZX: _u = 1; _v = 2; _w = 0; break;
+            case ZXY: _u = 2; _v = 0; _w = 1; break;
+            case ZYX: _u = 2; _v = 1; _w = 0; break;
             }
-        }
-    }
-    
-    unsafe void test_NodeMinLevel(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
-        int w = x1b, h = y1b;
-        int level = 2;
-        fixed (StackItem* stack = stack_main) {
-            var stack0 = stack + 8;
-            for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
-                var current = (stack + (*ptr1 & 7));
-                current->x0 = stack0->x0 + (current->dx0 >> level);
-                current->px0 = current->x0 >> subpixel_shift;
-                current->px0 = current->px0 - ((current->px0 - 0) & ((current->px0 - 0) >> 31));
-                current->y0 = stack0->y0 + (current->dy0 >> level);
-                current->py0 = current->y0 >> subpixel_shift;
-                current->py0 = current->py0 - ((current->py0 - stack0->last) & ((current->py0 - stack0->last) >> 31));
-                current->x1 = stack0->x1 + (current->dx1 >> level);
-                current->px1 = current->x1 >> subpixel_shift;
-                current->px1 = current->px1 + ((w - current->px1) & ((w - current->px1) >> 31));
-                current->y1 = stack0->y1 + (current->dy1 >> level);
-                current->py1 = current->y1 >> subpixel_shift;
-                current->py1 = current->py1 + ((h - current->py1) & ((h - current->py1) >> 31));
+            
+            uint queue = 0;
+            int shift = 0;
+            for (int w = 0; w <= 1; w++) {
+                for (int v = 0; v <= 1; v++) {
+                    for (int u = 0; u <= 1; u++) {
+                        int flip = (u << _u) | (v << _v) | (w << _w);
+                        int octant = (start ^ flip);
+                        if ((mask & (1 << octant)) == 0) continue;
+                        queue |= (uint)((octant|8) << shift);
+                        shift += 4;
+                    }
+                }
             }
-        }
-    }
-    
-    unsafe void test_NodeMinNoShift(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
-        int w = x1b, h = y1b;
-        fixed (StackItem* stack = stack_main) {
-            var stack0 = stack + 8;
-            for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
-                var current = (stack + (*ptr1 & 7));
-                current->x0 = stack0->x0 + current->dx0;
-                current->px0 = current->x0 - ((current->x0 - 0) & ((current->x0 - 0) >> 31));
-                current->y0 = stack0->y0 + current->dy0;
-                current->py0 = current->y0 - ((current->y0 - stack0->last) & ((current->y0 - stack0->last) >> 31));
-                current->x1 = stack0->x1 + current->dx1;
-                current->px1 = current->x1 + ((w - current->x1) & ((w - current->x1) >> 31));
-                current->y1 = stack0->y1 + current->dy1;
-                current->py1 = current->y1 + ((h - current->y1) & ((h - current->y1) >> 31));
-            }
-        }
-    }
-    
-    unsafe void test_NodeMinIf(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
-        int w = x1b, h = y1b;
-        fixed (StackItem* stack = stack_main) {
-            var stack0 = stack + 8;
-            for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
-                var current = (stack + (*ptr1 & 7));
-                current->x0 = stack0->x0 + current->dx0;
-                current->px0 = current->x0 >> subpixel_shift;
-                if (current->px0 < 0) current->px0 = 0;
-                current->y0 = stack0->y0 + current->dy0;
-                current->py0 = current->y0 >> subpixel_shift;
-                if (current->py0 < stack0->last) current->py0 = stack0->last;
-                current->x1 = stack0->x1 + current->dx1;
-                current->px1 = current->x1 >> subpixel_shift;
-                if (current->px1 > w) current->px1 = w;
-                current->y1 = stack0->y1 + current->dy1;
-                current->py1 = current->y1 >> subpixel_shift;
-                if (current->py1 > h) current->py1 = h;
-            }
-        }
-    }
-    
-    unsafe void test_NodeMinIfB(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
-        fixed (StackItem* stack = stack_main) {
-            var stack0 = stack + 8;
-            for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
-                var current = (stack + (*ptr1 & 7));
-                current->x0 = stack0->x0 + current->dx0;
-                current->px0 = current->x0 >> subpixel_shift;
-                if (current->px0 < stack0->x0b) current->px0 = stack0->x0b;
-                current->y0 = stack0->y0 + current->dy0;
-                current->py0 = current->y0 >> subpixel_shift;
-                if (current->py0 < stack0->y0b) current->py0 = stack0->y0b;
-                current->x1 = stack0->x1 + current->dx1;
-                current->px1 = current->x1 >> subpixel_shift;
-                if (current->px1 > stack0->x1b) current->px1 = stack0->x1b;
-                current->y1 = stack0->y1 + current->dy1;
-                current->py1 = current->y1 >> subpixel_shift;
-                if (current->py1 > stack0->y1b) current->py1 = stack0->y1b;
-            }
-        }
-    }
-    
-    unsafe void test_NodeMinIfC(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
-        fixed (StackItem* stack = stack_main) {
-            var stack0 = stack + 8;
-            for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
-                var current = (stack + (*ptr1 & 7));
-                current->x0 = stack0->x0 + current->dx0;
-                current->px0 = current->x0 >> subpixel_shift;
-                if (current->px0 < x0b) current->px0 = x0b;
-                current->y0 = stack0->y0 + current->dy0;
-                current->py0 = current->y0 >> subpixel_shift;
-                if (current->py0 < y0b) current->py0 = y0b;
-                current->x1 = stack0->x1 + current->dx1;
-                current->px1 = current->x1 >> subpixel_shift;
-                if (current->px1 > x1b) current->px1 = x1b;
-                current->y1 = stack0->y1 + current->dy1;
-                current->py1 = current->y1 >> subpixel_shift;
-                if (current->py1 > y1b) current->py1 = y1b;
-            }
-        }
-    }
-    
-    unsafe void test_NodeMinIfD(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
-        int w = x1b, h = y1b;
-        fixed (StackItem* stack = stack_main) {
-            var stack0 = stack + 8;
-            for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
-                var current = (stack + (*ptr1 & 7));
-                current->px0 = current->x0 = stack0->x0 + current->dx0;
-                if (current->px0 < 0) current->px0 = 0;
-                current->py0 = current->y0 = stack0->y0 + current->dy0;
-                if (current->py0 < stack0->last) current->py0 = stack0->last;
-                current->px1 = current->x1 = stack0->x1 + current->dx1;
-                if (current->px1 > w) current->px1 = w;
-                current->py1 = current->y1 = stack0->y1 + current->dy1;
-                if (current->py1 > h) current->py1 = h;
-            }
-        }
-    }
-    
-    unsafe void test_NodeMinIfE(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
-        int w = x1b, h = y1b;
-        fixed (StackItem* stack = stack_main) {
-            var stack0 = stack + 8;
-            for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
-                var current = (stack + (*ptr1 & 7));
-                current->px0 = current->x0 = stack0->x0 + current->dx0;
-                current->py0 = current->y0 = stack0->y0 + current->dy0;
-                current->px1 = current->x1 = stack0->x1 + current->dx1;
-                current->py1 = current->y1 = stack0->y1 + current->dy1;
-                if (current->px0 < 0) current->px0 = 0;
-                if (current->py0 < stack0->last) current->py0 = stack0->last;
-                if (current->px1 > w) current->px1 = w;
-                if (current->py1 > h) current->py1 = h;
-            }
-        }
-    }
-    
-    unsafe void test_NodeMinIfF(int* ptr1, int* ptr2, int* ptr1_end, int subpixel_shift=8, int x0b=0, int y0b=0, int x1b=640, int y1b=480) {
-        int w = x1b, h = y1b;
-        fixed (StackItem* stack = stack_main) {
-            var stack0 = stack + 8;
-            for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1) {
-                var current = (stack + (*ptr1 & 7));
-                current->x0 = stack0->x0 + current->dx0;
-                current->px0 = current->x0;
-                if (current->px0 < 0) current->px0 = 0;
-                current->y0 = stack0->y0 + current->dy0;
-                current->py0 = current->y0;
-                if (current->py0 < stack0->last) current->py0 = stack0->last;
-                current->x1 = stack0->x1 + current->dx1;
-                current->px1 = current->x1;
-                if (current->px1 > w) current->px1 = w;
-                current->y1 = stack0->y1 + current->dy1;
-                current->py1 = current->y1;
-                if (current->py1 > h) current->py1 = h;
-            }
+            
+            return queue;
         }
     }
 }
