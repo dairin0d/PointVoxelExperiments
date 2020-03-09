@@ -248,7 +248,7 @@ namespace dairin0d.Octree.Rendering {
                 y -= lh;
             }
             
-            DrawBox(new Rect(Screen.width - bw, Screen.height-lh*8, bw, lh*8));
+            DrawBox(new Rect(Screen.width - bw, Screen.height-lh*12, bw, lh*12));
             
             x = Screen.width - bw;
             y = Screen.height - lh;
@@ -268,7 +268,18 @@ namespace dairin0d.Octree.Rendering {
                 GUI.Label(new Rect(x, y, bw, lh), $"Stop At: {(int)Splatter.StopAt}");
                 y -= lh;
                 
+                subpixel_shift = (int)GUI.HorizontalSlider(new Rect(x, y, bw, lh), subpixel_shift, 0, 8);
+                y -= lh;
+                GUI.Label(new Rect(x, y, bw, lh), $"Subpixel: {subpixel_shift}");
+                y -= lh;
+                
                 Splatter.UseLast = GUI.Toggle(new Rect(x, y, bw, lh), Splatter.UseLast, "Use Last");
+                y -= lh;
+                
+                Splatter.UseMargins = GUI.Toggle(new Rect(x, y, bw, lh), Splatter.UseMargins, "Use Margins");
+                y -= lh;
+                
+                Splatter.UseFlat = GUI.Toggle(new Rect(x, y, bw, lh), Splatter.UseFlat, "Use Flat");
                 y -= lh;
                 
                 use_model = GUI.Toggle(new Rect(x, y, bw, lh), use_model, "Use model");
@@ -710,7 +721,7 @@ namespace dairin0d.Octree.Rendering {
             public int x1, y1;
             public int z;
         }
-        public Delta[] deltas = new Delta[8];
+        public Delta[] deltas = new Delta[8*32];
         
         public struct StackEntry {
             public int node;
@@ -731,6 +742,9 @@ namespace dairin0d.Octree.Rendering {
         
         public static bool UseLast = true;
         public static int StopAt = 0;
+        
+        public static bool UseFlat = false;
+        public static bool UseMargins = true;
         
         public static int SubpixelCount = 0;
         public static int PixelCount = 0;
@@ -767,27 +781,117 @@ namespace dairin0d.Octree.Rendering {
             root.y1 = (int)((center.y+extents.y)*pixel_size + 0.5f) + half_pixel;
             root.z = (int)((center.z-extents.z)*depth_scale + 0.5f);
             
-            var delta = deltas;
-            for (int subZ = -1; subZ <= 1; subZ += 2) {
-                for (int subY = -1; subY <= 1; subY += 2) {
-                    for (int subX = -1; subX <= 1; subX += 2) {
-                        float x = center.x + matrix.m00*subX + matrix.m01*subY + matrix.m02*subZ;
-                        float y = center.y + matrix.m10*subX + matrix.m11*subY + matrix.m12*subZ;
-                        float z = center.z + matrix.m20*subX + matrix.m21*subY + matrix.m22*subZ;
-                        int ix = (int)(x*pixel_size + 0.5f) + half_pixel;
-                        int iy = (int)(y*pixel_size + 0.5f) + half_pixel;
-                        int iz = (int)(z*depth_scale + 0.5f);
-                        delta->x0 = ix - root.x0; if (delta->x0 < 0) delta->x0 = 0;
-                        delta->y0 = iy - root.y0; if (delta->y0 < 0) delta->y0 = 0;
-                        delta->x1 = root.x1 - ix; if (delta->x1 < 0) delta->x1 = 0;
-                        delta->y1 = root.y1 - iy; if (delta->y1 < 0) delta->y1 = 0;
-                        delta->z = iz - root.z; if (delta->z < 0) delta->z = 0;
-                        ++delta;
+            if (UseMargins) {
+                // var delta = deltas;
+                // for (int subZ = -1; subZ <= 1; subZ += 2) {
+                //     for (int subY = -1; subY <= 1; subY += 2) {
+                //         for (int subX = -1; subX <= 1; subX += 2) {
+                //             float x = center.x + matrix.m00*subX + matrix.m01*subY + matrix.m02*subZ;
+                //             float y = center.y + matrix.m10*subX + matrix.m11*subY + matrix.m12*subZ;
+                //             float z = center.z + matrix.m20*subX + matrix.m21*subY + matrix.m22*subZ;
+                //             int ix = (int)(x*pixel_size + 0.5f) + half_pixel;
+                //             int iy = (int)(y*pixel_size + 0.5f) + half_pixel;
+                //             int iz = (int)(z*depth_scale + 0.5f);
+                //             delta->x0 = ix - root.x0; if (delta->x0 < 0) delta->x0 = 0;
+                //             delta->y0 = iy - root.y0; if (delta->y0 < 0) delta->y0 = 0;
+                //             delta->x1 = root.x1 - ix; if (delta->x1 < 0) delta->x1 = 0;
+                //             delta->y1 = root.y1 - iy; if (delta->y1 < 0) delta->y1 = 0;
+                //             delta->z = iz - root.z; if (delta->z < 0) delta->z = 0;
+                //             delta->z <<= 1;
+                //             ++delta;
+                //         }
+                //     }
+                // }
+                
+                {
+                    int octant = 0;
+                    for (int subZ = -1; subZ <= 1; subZ += 2) {
+                        for (int subY = -1; subY <= 1; subY += 2) {
+                            for (int subX = -1; subX <= 1; subX += 2) {
+                                var delta = deltas + octant;
+                                float x = center.x + matrix.m00*subX + matrix.m01*subY + matrix.m02*subZ;
+                                float y = center.y + matrix.m10*subX + matrix.m11*subY + matrix.m12*subZ;
+                                float z = center.z + matrix.m20*subX + matrix.m21*subY + matrix.m22*subZ;
+                                int ix = (int)(x*pixel_size + 0.5f) + half_pixel;
+                                int iy = (int)(y*pixel_size + 0.5f) + half_pixel;
+                                int iz = (int)(z*depth_scale + 0.5f);
+                                delta->x0 = ix - root.x0; if (delta->x0 < 0) delta->x0 = 0;
+                                delta->y0 = iy - root.y0; if (delta->y0 < 0) delta->y0 = 0;
+                                delta->x1 = root.x1 - ix; if (delta->x1 < 0) delta->x1 = 0;
+                                delta->y1 = root.y1 - iy; if (delta->y1 < 0) delta->y1 = 0;
+                                delta->z = iz - root.z; if (delta->z < 0) delta->z = 0;
+                                delta->x0 = delta->x0 >> 1;
+                                delta->x1 = delta->x1 >> 1;
+                                delta->y0 = delta->y0 >> 1;
+                                delta->y1 = delta->y1 >> 1;
+                                ++octant;
+                            }
+                        }
+                    }
+                }
+                
+                for (int level = 0; level < 16; ++level) {
+                    var delta = deltas + (level << 3);
+                    var subdelta = delta + 8;
+                    for (int octant = 0; octant < 8; ++octant, ++delta, ++subdelta) {
+                        subdelta->x0 = delta->x0 >> 1;
+                        subdelta->x1 = delta->x1 >> 1;
+                        subdelta->y0 = delta->y0 >> 1;
+                        subdelta->y1 = delta->y1 >> 1;
+                        subdelta->z = delta->z >> 1;
+                    }
+                }
+            } else {
+                int size_x = root.x1 - root.x0, half_x = UpperHalf(size_x), max_x = size_x - half_x;
+                int size_y = root.y1 - root.y0, half_y = UpperHalf(size_y), max_y = size_y - half_y;
+                
+                Vector2* uv = stackalloc Vector2[8];
+                
+                {
+                    var uv_rect = new Rect(center.x - extents.x*0.5f, center.y - extents.y*0.5f, 2 * extents.x, 2 * extents.y);
+                    int octant = 0;
+                    for (int subZ = -1; subZ <= 1; subZ += 2) {
+                        for (int subY = -1; subY <= 1; subY += 2) {
+                            for (int subX = -1; subX <= 1; subX += 2) {
+                                var delta = deltas + octant;
+                                float x = center.x + (matrix.m00*subX + matrix.m01*subY + matrix.m02*subZ)*0.5f;
+                                float y = center.y + (matrix.m10*subX + matrix.m11*subY + matrix.m12*subZ)*0.5f;
+                                float z = center.z + matrix.m20*subX + matrix.m21*subY + matrix.m22*subZ;
+                                uv[octant].x = (x - uv_rect.x) / uv_rect.width;
+                                uv[octant].y = (y - uv_rect.y) / uv_rect.height;
+                                delta->x0 = Mathf.Clamp((int)(uv[octant].x * size_x + 0.5f) + half_pixel, 0, max_x);
+                                delta->x1 = half_x;
+                                delta->y0 = Mathf.Clamp((int)(uv[octant].y * size_y + 0.5f) + half_pixel, 0, max_y);
+                                delta->y1 = half_y;
+                                delta->z = Mathf.Max((int)(z*depth_scale + 0.5f) - root.z, 0);
+                                ++octant;
+                            }
+                        }
+                    }
+                }
+                
+                for (int level = 0; level < 16; ++level) {
+                    size_x = half_x; half_x = UpperHalf(size_x); max_x = size_x - half_x;
+                    size_y = half_y; half_y = UpperHalf(size_y); max_y = size_y - half_y;
+                    var delta = deltas + (level << 3);
+                    var subdelta = delta + 8;
+                    for (int octant = 0; octant < 8; ++octant, ++delta, ++subdelta) {
+                        subdelta->x0 = Mathf.Clamp((int)(uv[octant].x * size_x), 0, max_x);
+                        subdelta->x1 = half_x;
+                        subdelta->y0 = Mathf.Clamp((int)(uv[octant].y * size_y), 0, max_y);
+                        subdelta->y1 = half_y;
+                        subdelta->z = delta->z >> 1;
                     }
                 }
             }
             
             return root;
+            
+            int UpperHalf(int value) {
+                if (value > 1) return (value+1) >> 1; // (3 >> 1) = 1
+                if (value < -1) return value >> 1; // (-3 >> 1) = -2
+                return 0;
+            }
         }
         
         public unsafe static void Render(Buffer.DataItem* buf, int w, int h, int tile_shift,
@@ -892,6 +996,8 @@ namespace dairin0d.Octree.Rendering {
                     continue;
                 }
                 
+                if (UseFlat) current->z = 0; // FOR TEST
+                
                 if ((pw|ph) == 1) {
                     ++PixelCount;
                     
@@ -959,18 +1065,34 @@ namespace dairin0d.Octree.Rendering {
                     int x1 = current->x1, y1 = current->y1;
                     int z = current->z, last = current->last;
                     int level = current->level+1;
+                    var level_deltas = deltas + (current->level << 3);
                     for (; queue != 0; queue >>= 4) {
                         int octant = (int)(queue & 7);
-                        var delta = deltas + octant;
                         ++stack; ++stack_top;
                         stack->node = 0;
                         stack->level = level;
                         stack->last = last;
-                        stack->x0 = x0 + (delta->x0 >> level);
-                        stack->y0 = y0 + (delta->y0 >> level);
-                        stack->x1 = x1 - (delta->x1 >> level);
-                        stack->y1 = y1 - (delta->y1 >> level);
-                        stack->z = z + (delta->z >> level);
+                        if (UseMargins) {
+                            // var delta = deltas + octant;
+                            // stack->x0 = x0 + (delta->x0 >> level);
+                            // stack->y0 = y0 + (delta->y0 >> level);
+                            // stack->x1 = x1 - (delta->x1 >> level);
+                            // stack->y1 = y1 - (delta->y1 >> level);
+                            // stack->z = z + (delta->z >> level);
+                            var delta = level_deltas + octant;
+                            stack->x0 = x0 + delta->x0;
+                            stack->y0 = y0 + delta->y0;
+                            stack->x1 = x1 - delta->x1;
+                            stack->y1 = y1 - delta->y1;
+                            stack->z = z + delta->z;
+                        } else {
+                            var delta = level_deltas + octant;
+                            stack->x0 = x0 + delta->x0;
+                            stack->x1 = stack->x0 + delta->x1;
+                            stack->y0 = y0 + delta->y0;
+                            stack->y1 = stack->y0 + delta->y1;
+                            stack->z = z + delta->z;
+                        }
                         stack->color = color;
                     }
                 } else {
@@ -981,18 +1103,34 @@ namespace dairin0d.Octree.Rendering {
                     int x1 = current->x1, y1 = current->y1;
                     int z = current->z, last = current->last;
                     int level = current->level+1;
+                    var level_deltas = deltas + (current->level << 3);
                     for (; queue != 0; queue >>= 4) {
                         int octant = (int)(queue & 7);
-                        var delta = deltas + octant;
                         ++stack; ++stack_top;
                         stack->node = node[octant];
                         stack->level = level;
                         stack->last = last;
-                        stack->x0 = x0 + (delta->x0 >> level);
-                        stack->y0 = y0 + (delta->y0 >> level);
-                        stack->x1 = x1 - (delta->x1 >> level);
-                        stack->y1 = y1 - (delta->y1 >> level);
-                        stack->z = z + (delta->z >> level);
+                        if (UseMargins) {
+                            // var delta = deltas + octant;
+                            // stack->x0 = x0 + (delta->x0 >> level);
+                            // stack->y0 = y0 + (delta->y0 >> level);
+                            // stack->x1 = x1 - (delta->x1 >> level);
+                            // stack->y1 = y1 - (delta->y1 >> level);
+                            // stack->z = z + (delta->z >> level);
+                            var delta = level_deltas + octant;
+                            stack->x0 = x0 + delta->x0;
+                            stack->y0 = y0 + delta->y0;
+                            stack->x1 = x1 - delta->x1;
+                            stack->y1 = y1 - delta->y1;
+                            stack->z = z + delta->z;
+                        } else {
+                            var delta = level_deltas + octant;
+                            stack->x0 = x0 + delta->x0;
+                            stack->x1 = stack->x0 + delta->x1;
+                            stack->y0 = y0 + delta->y0;
+                            stack->y1 = stack->y0 + delta->y1;
+                            stack->z = z + delta->z;
+                        }
                         stack->color = color[octant];
                     }
                 }

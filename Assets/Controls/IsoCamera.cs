@@ -146,10 +146,20 @@ public class IsoCamera : MonoBehaviour {
 	}
 
 	void OnGUI() {
-		int line_h = GUI.skin.font.lineHeight;
+		int line_h = 20;
 		int line_y = 0;
+		
+		DrawBox(new Rect(0, 0, 100, line_h*2));
+		
 		GUI.Label(new Rect(0, line_y, 200, 20), Screen.width+" x "+Screen.height);
 		line_y += line_h;
 		GUI.Label(new Rect(0, line_y, 200, 20), "FPS="+(1f/dt).ToString("0.000"));
+		line_y += line_h;
+		
+		void DrawBox(Rect rect, int repeats=2) {
+			for (; repeats > 0; repeats--) {
+				GUI.Box(rect, "");
+			}
+		}
 	}
 }
