@@ -230,7 +230,7 @@ namespace dairin0d.Octree.Rendering {
             
             GUI.DrawTexture(cam.pixelRect, tex, ScaleMode.StretchToFill, true);
             
-            DrawBox(new Rect(0, Screen.height-lh*8, bw, lh*8));
+            DrawBox(new Rect(0, Screen.height-lh*7, bw, Screen.height));
             
             x = 0;
             y = Screen.height - lh;
@@ -240,8 +240,6 @@ namespace dairin0d.Octree.Rendering {
                 GUI.Label(new Rect(x, y, Screen.width, lh), info);
                 y -= lh;
                 
-                GUI.Label(new Rect(x, y, Screen.width, lh), $"SubpixelCount={Splatter.SubpixelCount}");
-                y -= lh;
                 GUI.Label(new Rect(x, y, Screen.width, lh), $"PixelCount={Splatter.PixelCount}");
                 y -= lh;
                 GUI.Label(new Rect(x, y, Screen.width, lh), $"QuadCount={Splatter.QuadCount}");
@@ -254,7 +252,7 @@ namespace dairin0d.Octree.Rendering {
                 y -= lh;
             }
             
-            DrawBox(new Rect(Screen.width - bw, Screen.height-lh*10, bw, lh*10));
+            DrawBox(new Rect(Screen.width - bw, Screen.height-lh*10, bw, Screen.height));
             
             x = Screen.width - bw;
             y = Screen.height - lh;
@@ -375,7 +373,6 @@ namespace dairin0d.Octree.Rendering {
             
             stopwatch.Restart();
             
-            Splatter.SubpixelCount = 0;
             Splatter.PixelCount = 0;
             Splatter.QuadCount = 0;
             Splatter.CulledCount = 0;
@@ -743,7 +740,6 @@ namespace dairin0d.Octree.Rendering {
         public static bool UseLast = true;
         public static int StopAt = 0;
         
-        public static int SubpixelCount = 0;
         public static int PixelCount = 0;
         public static int QuadCount = 0;
         public static int OccludedCount = 0;
@@ -911,6 +907,10 @@ namespace dairin0d.Octree.Rendering {
             
             int row = 1 << tile_shift;
             
+            uint queue = 0;
+            var node = nodes;
+            var color = colors;
+            
             do {
                 ++NodeCount;
                 
@@ -919,29 +919,27 @@ namespace dairin0d.Octree.Rendering {
                 
                 // Calculate pixel rect
                 int px0 = current->x0 >> subpixel_shift;
+                if (px0 < 0) px0 = 0;
+                // px0 = px0 - ((px0 - 0) & ((px0 - 0) >> 31)); // branchless max
                 int py0 = current->y0 >> subpixel_shift;
-                int px1 = current->x1 >> subpixel_shift;
-                int py1 = current->y1 >> subpixel_shift;
-                int pw = px1 - px0, ph = py1 - py0;
-                // if (px0 < 0) px0 = 0;
                 // if (py0 < 0) py0 = 0;
-                // if (px1 > w) px1 = w;
-                // if (py1 > h) py1 = h;
-                px0 = px0 - ((px0 - 0) & ((px0 - 0) >> 31)); // branchless max
-                // py0 = py0 - ((py0 - 0) & ((py0 - 0) >> 31)); // branchless max
-                py0 = py0 - ((py0 - current->last) & ((py0 - current->last) >> 31)); // branchless max
-                px1 = px1 + ((w - px1) & ((w - px1) >> 31)); // branchless min
-                py1 = py1 + ((h - py1) & ((h - py1) >> 31)); // branchless min
-                
-                if ((pw <= 0) | (ph <= 0)) {
-                    ++SubpixelCount;
-                }
+                if (py0 < current->last) py0 = current->last;
+                // // py0 = py0 - ((py0 - 0) & ((py0 - 0) >> 31)); // branchless max
+                // py0 = py0 - ((py0 - current->last) & ((py0 - current->last) >> 31)); // branchless max
+                int px1 = current->x1 >> subpixel_shift;
+                if (px1 > w) px1 = w;
+                // px1 = px1 + ((w - px1) & ((w - px1) >> 31)); // branchless min
+                int py1 = current->y1 >> subpixel_shift;
+                if (py1 > h) py1 = h;
+                // py1 = py1 + ((h - py1) & ((h - py1) >> 31)); // branchless min
                 
                 // Overlap/contribution test
                 if ((px0 >= px1) | (py0 >= py1)) {
                     ++CulledCount;
                     continue;
                 }
+                
+                int pw = px1 - px0, ph = py1 - py0;
                 
                 if ((pw|ph) == 1) {
                     ++PixelCount;
@@ -1002,64 +1000,44 @@ namespace dairin0d.Octree.Rendering {
                 
                 // Add subnodes to the stack
                 int mask = (current->node >> 24) & 0xFF;
-                uint queue = queues[reverse_key | mask];
-                if (queue == 0) {
+                bool is_leaf = (mask == 0);
+                if (is_leaf) {
                     queue = queues[reverse_key | 255] & 0x0FFFFFFF;
-                    var color = current->color;
-                    int x0 = current->x0, y0 = current->y0;
-                    int x1 = current->x1, y1 = current->y1;
-                    int z = current->z, last = current->last;
-                    int level = current->level+1;
-                    var level_deltas = deltas + (current->level << 3);
-                    for (; queue != 0; queue >>= 4) {
-                        int octant = (int)(queue & 7);
-                        ++stack; ++stack_top;
-                        stack->node = 0;
-                        stack->level = level;
-                        stack->last = last;
-                        // var delta = deltas + octant;
-                        // stack->x0 = x0 + (delta->x0 >> level);
-                        // stack->y0 = y0 + (delta->y0 >> level);
-                        // stack->x1 = x1 - (delta->x1 >> level);
-                        // stack->y1 = y1 - (delta->y1 >> level);
-                        // stack->z = z + (delta->z >> level);
-                        var delta = level_deltas + octant;
-                        stack->x0 = x0 + delta->x0;
-                        stack->y0 = y0 + delta->y0;
-                        stack->x1 = x1 - delta->x1;
-                        stack->y1 = y1 - delta->y1;
-                        stack->z = z + delta->z;
-                        stack->color = color;
-                    }
                 } else {
+                    queue = queues[reverse_key | mask];
                     int offset = (current->node & 0xFFFFFF) << 3;
-                    var node = nodes + offset;
-                    var color = colors + offset;
-                    int x0 = current->x0, y0 = current->y0;
-                    int x1 = current->x1, y1 = current->y1;
-                    int z = current->z, last = current->last;
-                    int level = current->level+1;
-                    var level_deltas = deltas + (current->level << 3);
-                    for (; queue != 0; queue >>= 4) {
-                        int octant = (int)(queue & 7);
-                        ++stack; ++stack_top;
+                    node = nodes + offset;
+                    color = colors + offset;
+                }
+                int x0 = current->x0, y0 = current->y0;
+                int x1 = current->x1, y1 = current->y1;
+                int z = current->z, last = current->last;
+                int level = current->level+1;
+                var level_deltas = deltas + (current->level << 3);
+                for (; queue != 0; queue >>= 4) {
+                    int octant = (int)(queue & 7);
+                    ++stack; ++stack_top;
+                    if (is_leaf) {
+                        stack->node = 0;
+                        stack->color = current->color;
+                    } else {
                         stack->node = node[octant];
-                        stack->level = level;
-                        stack->last = last;
-                        // var delta = deltas + octant;
-                        // stack->x0 = x0 + (delta->x0 >> level);
-                        // stack->y0 = y0 + (delta->y0 >> level);
-                        // stack->x1 = x1 - (delta->x1 >> level);
-                        // stack->y1 = y1 - (delta->y1 >> level);
-                        // stack->z = z + (delta->z >> level);
-                        var delta = level_deltas + octant;
-                        stack->x0 = x0 + delta->x0;
-                        stack->y0 = y0 + delta->y0;
-                        stack->x1 = x1 - delta->x1;
-                        stack->y1 = y1 - delta->y1;
-                        stack->z = z + delta->z;
                         stack->color = color[octant];
                     }
+                    stack->level = level;
+                    stack->last = last;
+                    // var delta = deltas + octant;
+                    // stack->x0 = x0 + (delta->x0 >> level);
+                    // stack->y0 = y0 + (delta->y0 >> level);
+                    // stack->x1 = x1 - (delta->x1 >> level);
+                    // stack->y1 = y1 - (delta->y1 >> level);
+                    // stack->z = z + (delta->z >> level);
+                    var delta = level_deltas + octant;
+                    stack->x0 = x0 + delta->x0;
+                    stack->y0 = y0 + delta->y0;
+                    stack->x1 = x1 - delta->x1;
+                    stack->y1 = y1 - delta->y1;
+                    stack->z = z + delta->z;
                 }
             } while (stack_top >= 0);
         }
