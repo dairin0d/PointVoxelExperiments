@@ -262,7 +262,7 @@ namespace dairin0d.Octree.Rendering {
                 GUI.Label(new Rect(x, y, bw, lh), $"Tlie: {(int)TilePow}");
                 y -= lh;
                 
-                Splatter.MaxLevel = GUI.HorizontalSlider(new Rect(x, y, bw, lh), Splatter.MaxLevel, 0, 12);
+                Splatter.MaxLevel = GUI.HorizontalSlider(new Rect(x, y, bw, lh), Splatter.MaxLevel, 0, 16);
                 y -= lh;
                 GUI.Label(new Rect(x, y, bw, lh), $"Level: {(int)Splatter.MaxLevel}");
                 y -= lh;
@@ -270,6 +270,11 @@ namespace dairin0d.Octree.Rendering {
                 Splatter.StopAt = (int)GUI.HorizontalSlider(new Rect(x, y, bw, lh), Splatter.StopAt, 0, 8);
                 y -= lh;
                 GUI.Label(new Rect(x, y, bw, lh), $"Stop At: {(int)Splatter.StopAt}");
+                y -= lh;
+                
+                Splatter.RenderAlg = (int)GUI.HorizontalSlider(new Rect(x, y, bw, lh), Splatter.RenderAlg, 0, 8);
+                y -= lh;
+                GUI.Label(new Rect(x, y, bw, lh), $"Renderer: {(int)Splatter.RenderAlg}");
                 y -= lh;
                 
                 subpixel_shift = (int)GUI.HorizontalSlider(new Rect(x, y, bw, lh), subpixel_shift, 0, 8);
@@ -344,7 +349,9 @@ namespace dairin0d.Octree.Rendering {
         void CollectRenderers() {
             visible_objects.Clear();
             WalkChildren<Renderer>(PointCloudsParent, AddRenderer);
-            visible_objects.Sort();
+            visible_objects.Sort((itemA, itemB) => {
+                return itemA.Item1.CompareTo(itemB.Item1);
+            });
             
             void AddRenderer(Renderer renderer) {
                 if (!renderer.enabled) return;
@@ -507,11 +514,23 @@ namespace dairin0d.Octree.Rendering {
                 }
                 stream.Close();
                 stream.Dispose();
+                SanitizeNodes(octree.nodes);
     			Debug.Log("Cached version loaded: "+cached_path);
                 return octree;
             } catch (System.Exception exc) {
                 Debug.LogException(exc);
                 return null;
+            }
+        }
+        
+        static unsafe void SanitizeNodes(int[] nodes) {
+            const int mask = 0xFF << 24;
+            fixed (int* _nodes_ptr = nodes) {
+                int* nodes_ptr = _nodes_ptr;
+                int* nodes_end = nodes_ptr + nodes.Length;
+                for (; nodes_ptr != nodes_end; ++nodes_ptr) {
+                    if (((*nodes_ptr) & mask) == 0) *nodes_ptr = 0;
+                }
             }
         }
         
@@ -606,6 +625,7 @@ namespace dairin0d.Octree.Rendering {
                     ++id;
                     int subid = id;
                     var (submask, subcolor) = LinearizeOctree(subnode, nodes, colors, ref id);
+                    if (submask == 0) subid = 0;
                     nodes[pos0|i] = (submask << 24) | subid;
                     colors[pos0|i] = subcolor;
                 }
@@ -721,17 +741,15 @@ namespace dairin0d.Octree.Rendering {
         public Delta[] deltas = new Delta[8*32];
         
         public struct StackEntry {
+            public Color32 color;
             public int node;
             public int level;
             public int last;
-            public int x0, y0;
-            public int x1, y1;
-            public int z;
-            public Color32 color;
-            // public int dx0, x0, px0, x0b;
-            // public int dy0, y0, py0, y0b;
-            // public int dx1, x1, px1, x1b;
-            // public int dy1, y1, py1, y1b;
+            public int dx0, x0, px0, x0b;
+            public int dy0, y0, py0, y0b;
+            public int dx1, x1, px1, x1b;
+            public int dy1, y1, py1, y1b;
+            public int dz, z, z0b, z1b;
         }
         public StackEntry[] stack = new StackEntry[8*32];
         
@@ -739,6 +757,8 @@ namespace dairin0d.Octree.Rendering {
         
         public static bool UseLast = true;
         public static int StopAt = 0;
+        
+        public static int RenderAlg = 0;
         
         public static int PixelCount = 0;
         public static int QuadCount = 0;
@@ -774,27 +794,6 @@ namespace dairin0d.Octree.Rendering {
             root.y1 = (int)((center.y+extents.y)*pixel_size + 0.5f) + half_pixel;
             root.z = (int)((center.z-extents.z)*depth_scale + 0.5f);
             
-            // var delta = deltas;
-            // for (int subZ = -1; subZ <= 1; subZ += 2) {
-            //     for (int subY = -1; subY <= 1; subY += 2) {
-            //         for (int subX = -1; subX <= 1; subX += 2) {
-            //             float x = center.x + matrix.m00*subX + matrix.m01*subY + matrix.m02*subZ;
-            //             float y = center.y + matrix.m10*subX + matrix.m11*subY + matrix.m12*subZ;
-            //             float z = center.z + matrix.m20*subX + matrix.m21*subY + matrix.m22*subZ;
-            //             int ix = (int)(x*pixel_size + 0.5f) + half_pixel;
-            //             int iy = (int)(y*pixel_size + 0.5f) + half_pixel;
-            //             int iz = (int)(z*depth_scale + 0.5f);
-            //             delta->x0 = ix - root.x0; if (delta->x0 < 0) delta->x0 = 0;
-            //             delta->y0 = iy - root.y0; if (delta->y0 < 0) delta->y0 = 0;
-            //             delta->x1 = root.x1 - ix; if (delta->x1 < 0) delta->x1 = 0;
-            //             delta->y1 = root.y1 - iy; if (delta->y1 < 0) delta->y1 = 0;
-            //             delta->z = iz - root.z; if (delta->z < 0) delta->z = 0;
-            //             delta->z <<= 1;
-            //             ++delta;
-            //         }
-            //     }
-            // }
-            
             {
                 int octant = 0;
                 for (int subZ = -1; subZ <= 1; subZ += 2) {
@@ -816,6 +815,7 @@ namespace dairin0d.Octree.Rendering {
                             delta->x1 = delta->x1 >> 1;
                             delta->y0 = delta->y0 >> 1;
                             delta->y1 = delta->y1 >> 1;
+                            delta->z = delta->z >> 1;
                             ++octant;
                         }
                     }
@@ -886,12 +886,16 @@ namespace dairin0d.Octree.Rendering {
                     stack->z = root.z;
                     stack->color = color;
                     
-                    Render(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack);
+                    if (RenderAlg == 1) {
+                        Render1(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack);
+                    } else {
+                        Render0(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack);
+                    }
                 }
             }
         }
         
-        unsafe static void Render(Buffer.DataItem* tile, int w, int h, int tile_shift,
+        unsafe static void Render0(Buffer.DataItem* tile, int w, int h, int tile_shift,
             int* nodes, Color32* colors, int forward_key, int subpixel_shift,
             uint* queues, Delta* deltas, StackEntry* stack)
         {
@@ -1002,7 +1006,7 @@ namespace dairin0d.Octree.Rendering {
                 int mask = (current->node >> 24) & 0xFF;
                 bool is_leaf = (mask == 0);
                 if (is_leaf) {
-                    queue = queues[reverse_key | 255] & 0x0FFFFFFF;
+                    queue = (queues[reverse_key | 255] >> 4) & 0x0FFFFFFF;
                 } else {
                     queue = queues[reverse_key | mask];
                     int offset = (current->node & 0xFFFFFF) << 3;
@@ -1026,12 +1030,6 @@ namespace dairin0d.Octree.Rendering {
                     }
                     stack->level = level;
                     stack->last = last;
-                    // var delta = deltas + octant;
-                    // stack->x0 = x0 + (delta->x0 >> level);
-                    // stack->y0 = y0 + (delta->y0 >> level);
-                    // stack->x1 = x1 - (delta->x1 >> level);
-                    // stack->y1 = y1 - (delta->y1 >> level);
-                    // stack->z = z + (delta->z >> level);
                     var delta = level_deltas + octant;
                     stack->x0 = x0 + delta->x0;
                     stack->y0 = y0 + delta->y0;
@@ -1040,6 +1038,179 @@ namespace dairin0d.Octree.Rendering {
                     stack->z = z + delta->z;
                 }
             } while (stack_top >= 0);
+        }
+        
+        unsafe static void Render1(Buffer.DataItem* tile, int w, int h, int tile_shift,
+            int* nodes, Color32* colors, int forward_key, int subpixel_shift,
+            uint* queues, Delta* deltas, StackEntry* stack)
+        {
+            stack->px0 = stack->x0 >> subpixel_shift;
+            if (stack->px0 < 0) stack->px0 = 0;
+            stack->py0 = stack->y0 >> subpixel_shift;
+            if (stack->py0 < 0) stack->py0 = 0;
+            stack->px1 = stack->x1 >> subpixel_shift;
+            if (stack->px1 > w) stack->px1 = w;
+            stack->py1 = stack->y1 >> subpixel_shift;
+            if (stack->py1 > h) stack->py1 = h;
+            
+            if ((stack->px0 >= stack->px1) | (stack->py0 >= stack->py1)) return;
+            
+            // We need to put nodes on stack in back-to-front order
+            int reverse_key = forward_key ^ 0b11100000000;
+            
+            int tile_size = 1 << tile_shift;
+            
+            int max_level = (int)MaxLevel;
+            max_level = Mathf.Clamp(max_level, 0, 32);
+            
+            int stack_top = 0;
+            
+            int row = 1 << tile_shift;
+            
+            uint queue = 0;
+            var node = nodes;
+            var color = colors;
+            
+            while (stack_top >= 0) {
+                ++NodeCount;
+                
+                var current = stack;
+                --stack; --stack_top;
+                
+                int pw = current->px1 - current->px0;
+                int ph = current->py1 - current->py0;
+                
+                if ((pw|ph) == 1) {
+                    ++PixelCount;
+                    var tile_x = tile + current->px0 + (current->py0 << tile_shift);
+                    if (tile_x->depth > current->z) {
+                        tile_x->depth = current->z;
+                        tile_x->color = current->color;
+                    }
+                    continue;
+                }
+                
+                // Occlusion test
+                {
+                    int drow = row - pw;
+                    int cmp_z = current->z;
+                    var pixel = tile + (current->px0 + (current->py0 << tile_shift));
+                    var endpixel = pixel + pw;
+                    var lastpixel = endpixel + (ph << tile_shift);
+                    
+                    occlusion_start:;
+                    if (cmp_z < pixel->depth) goto occlusion_passed;
+                    ++pixel;
+                    if (pixel != endpixel) goto occlusion_start;
+                    if (pixel == lastpixel) {
+                        ++OccludedCount;
+                        continue;
+                    }
+                    pixel += drow;
+                    endpixel += row;
+                    goto occlusion_start;
+                    occlusion_passed:
+                    if (UseLast) current->py0 = ((int)(pixel - tile)) >> tile_shift;
+                }
+                
+                if ((pw <= 2) & (ph <= 2)) {
+                    ++QuadCount;
+                    
+                    int mask = (current->node >> 24) & 0xFF;
+                    bool is_leaf = (mask == 0);
+                    if (is_leaf) {
+                        queue = queues[forward_key | 255] & 0x0FFFFFFF;
+                    } else {
+                        queue = queues[forward_key | mask];
+                        int offset = (current->node & 0xFFFFFF) << 3;
+                        color = colors + offset;
+                    }
+                    
+                    int x0 = current->x0, y0 = current->y0;
+                    int x1 = current->x1, y1 = current->y1;
+                    int z = current->z, ymin = current->py0;
+                    var level_deltas = deltas + (current->level << 3);
+                    
+                    for (; queue != 0; queue >>= 4) {
+                        int octant = (int)(queue & 7);
+                        
+                        var delta = level_deltas + octant;
+                        int px = (x0 + delta->x0 + x1 - delta->x1) >> (subpixel_shift+1);
+                        int py = (y0 + delta->y0 + y1 - delta->y1) >> (subpixel_shift+1);
+                        if ((px < 0) | (py < ymin) | (px >= w) | (py >= h)) continue;
+                        int pz = z + delta->z;
+                        
+                        var tile_x = tile + px + (py << tile_shift);
+                        if (tile_x->depth > pz) {
+                            tile_x->depth = pz;
+                            if (is_leaf) {
+                                tile_x->color = current->color;
+                            } else {
+                                tile_x->color = color[octant];
+                            }
+                        }
+                    }
+                    
+                    continue;
+                }
+                
+                // Add subnodes to the stack
+                {
+                    int mask = (current->node >> 24) & 0xFF;
+                    bool is_leaf = (mask == 0);
+                    if (is_leaf) {
+                        queue = (queues[reverse_key | 255] >> 4) & 0x0FFFFFFF;
+                    } else {
+                        queue = queues[reverse_key | mask];
+                        int offset = (current->node & 0xFFFFFF) << 3;
+                        node = nodes + offset;
+                        color = colors + offset;
+                    }
+                    
+                    int x0 = current->x0, y0 = current->y0;
+                    int x1 = current->x1, y1 = current->y1;
+                    int z = current->z, ymin = current->py0;
+                    int level = current->level+1;
+                    var level_deltas = deltas + (current->level << 3);
+                    
+                    for (; queue != 0; queue >>= 4) {
+                        int octant = (int)(queue & 7);
+                        
+                        var delta = level_deltas + octant;
+                        int _x0 = x0 + delta->x0, _px0 = _x0 >> subpixel_shift; if (_px0 < 0) _px0 = 0;
+                        int _y0 = y0 + delta->y0, _py0 = _y0 >> subpixel_shift; if (_py0 < ymin) _py0 = ymin;
+                        int _x1 = x1 - delta->x1, _px1 = _x1 >> subpixel_shift; if (_px1 > w) _px1 = w;
+                        int _y1 = y1 - delta->y1, _py1 = _y1 >> subpixel_shift; if (_py1 > h) _py1 = h;
+                        
+                        // Overlap/contribution test
+                        if ((_px0 >= _px1) | (_py0 >= _py1)) {
+                            ++CulledCount;
+                            continue;
+                        }
+                        
+                        ++stack; ++stack_top;
+                        
+                        stack->x0 = _x0;
+                        stack->y0 = _y0;
+                        stack->x1 = _x1;
+                        stack->y1 = _y1;
+                        stack->px0 = _px0;
+                        stack->py0 = _py0;
+                        stack->px1 = _px1;
+                        stack->py1 = _py1;
+                        stack->z = z + delta->z;
+                        
+                        stack->level = level;
+                        if (is_leaf) {
+                            stack->node = 0;
+                            stack->color = current->color;
+                        } else {
+                            stack->node = node[octant];
+                            stack->color = color[octant];
+                        }
+                    }
+                }
+            }
         }
     }
     
