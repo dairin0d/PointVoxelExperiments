@@ -74,6 +74,7 @@ Performance notes:
   in IL2CPP builds, it seems to make no difference
 * Using "not drawn test" (node.z = constant) instead of depth test slightly
   reduces the number of processed nodes, but not enough to be useful.
+* Render1 is perceivably faster than Render0 (~20%)
 
 Various ideas:
 * pixels whose depth test had failed for the parent node don't need to be
@@ -737,6 +738,8 @@ namespace dairin0d.Octree.Rendering {
             public int x0, y0;
             public int x1, y1;
             public int z;
+            public int pad0; // just for power-of-2 size
+            public int x01, y01;
         }
         public Delta[] deltas = new Delta[8*32];
         
@@ -750,6 +753,7 @@ namespace dairin0d.Octree.Rendering {
             public int dx1, x1, px1, x1b;
             public int dy1, y1, py1, y1b;
             public int dz, z, z0b, z1b;
+            public int pw, ph;
         }
         public StackEntry[] stack = new StackEntry[8*32];
         
@@ -816,6 +820,8 @@ namespace dairin0d.Octree.Rendering {
                             delta->y0 = delta->y0 >> 1;
                             delta->y1 = delta->y1 >> 1;
                             delta->z = delta->z >> 1;
+                            delta->x01 = delta->x0 - delta->x1;
+                            delta->y01 = delta->y0 - delta->y1;
                             ++octant;
                         }
                     }
@@ -831,6 +837,8 @@ namespace dairin0d.Octree.Rendering {
                     subdelta->y0 = delta->y0 >> 1;
                     subdelta->y1 = delta->y1 >> 1;
                     subdelta->z = delta->z >> 1;
+                    subdelta->x01 = subdelta->x0 - subdelta->x1;
+                    subdelta->y01 = subdelta->y0 - subdelta->y1;
                 }
             }
             
@@ -1055,13 +1063,23 @@ namespace dairin0d.Octree.Rendering {
             
             if ((stack->px0 >= stack->px1) | (stack->py0 >= stack->py1)) return;
             
+            stack->pw = stack->px1 - stack->px0;
+            stack->ph = stack->py1 - stack->py0;
+            
+            int pixel_size = 1 << subpixel_shift;
+            int half_pixel = pixel_size >> 1;
+            
             // We need to put nodes on stack in back-to-front order
             int reverse_key = forward_key ^ 0b11100000000;
             
             int tile_size = 1 << tile_shift;
             
-            int max_level = (int)MaxLevel;
-            max_level = Mathf.Clamp(max_level, 0, 32);
+            // int max_level = 0;
+            // {
+            //     int sz = Mathf.Max(stack->x1 - stack->x0, stack->y1 - stack->y0);
+            //     int szm = 1 << subpixel_shift;
+            //     while ((sz >> max_level) > szm) ++max_level;
+            // }
             
             int stack_top = 0;
             
@@ -1077,10 +1095,7 @@ namespace dairin0d.Octree.Rendering {
                 var current = stack;
                 --stack; --stack_top;
                 
-                int pw = current->px1 - current->px0;
-                int ph = current->py1 - current->py0;
-                
-                if ((pw|ph) == 1) {
+                if ((current->pw|current->ph) == 1) {
                     ++PixelCount;
                     var tile_x = tile + current->px0 + (current->py0 << tile_shift);
                     if (tile_x->depth > current->z) {
@@ -1092,6 +1107,9 @@ namespace dairin0d.Octree.Rendering {
                 
                 // Occlusion test
                 {
+                    int pw = current->px1 - current->px0;
+                    int ph = current->py1 - current->py0;
+                    
                     int drow = row - pw;
                     int cmp_z = current->z;
                     var pixel = tile + (current->px0 + (current->py0 << tile_shift));
@@ -1113,8 +1131,8 @@ namespace dairin0d.Octree.Rendering {
                     if (UseLast) current->py0 = ((int)(pixel - tile)) >> tile_shift;
                 }
                 
-                if ((pw <= 2) & (ph <= 2)) {
-                    ++QuadCount;
+                if ((current->pw <= 2) & (current->ph <= 2)) {
+                    // ++QuadCount;
                     
                     int mask = (current->node >> 24) & 0xFF;
                     bool is_leaf = (mask == 0);
@@ -1128,6 +1146,9 @@ namespace dairin0d.Octree.Rendering {
                     
                     int x0 = current->x0, y0 = current->y0;
                     int x1 = current->x1, y1 = current->y1;
+                    int x = current->x0 + current->x1 - pixel_size;
+                    int y = current->y0 + current->y1 - pixel_size;
+                    int subpixel_shift1 = subpixel_shift+1;
                     int z = current->z, ymin = current->py0;
                     var level_deltas = deltas + (current->level << 3);
                     
@@ -1135,8 +1156,9 @@ namespace dairin0d.Octree.Rendering {
                         int octant = (int)(queue & 7);
                         
                         var delta = level_deltas + octant;
-                        int px = (x0 + delta->x0 + x1 - delta->x1) >> (subpixel_shift+1);
-                        int py = (y0 + delta->y0 + y1 - delta->y1) >> (subpixel_shift+1);
+                        
+                        int px = (x + delta->x01) >> subpixel_shift1;
+                        int py = (y + delta->y01) >> subpixel_shift1;
                         if ((px < 0) | (py < ymin) | (px >= w) | (py >= h)) continue;
                         int pz = z + delta->z;
                         
@@ -1177,10 +1199,18 @@ namespace dairin0d.Octree.Rendering {
                         int octant = (int)(queue & 7);
                         
                         var delta = level_deltas + octant;
-                        int _x0 = x0 + delta->x0, _px0 = _x0 >> subpixel_shift; if (_px0 < 0) _px0 = 0;
-                        int _y0 = y0 + delta->y0, _py0 = _y0 >> subpixel_shift; if (_py0 < ymin) _py0 = ymin;
-                        int _x1 = x1 - delta->x1, _px1 = _x1 >> subpixel_shift; if (_px1 > w) _px1 = w;
-                        int _y1 = y1 - delta->y1, _py1 = _y1 >> subpixel_shift; if (_py1 > h) _py1 = h;
+                        
+                        int _x0 = x0 + delta->x0, _px0 = _x0 >> subpixel_shift;
+                        int _x1 = x1 - delta->x1, _px1 = _x1 >> subpixel_shift;
+                        int _pw = _px1 - _px0;
+                        if (_px0 < 0) _px0 = 0;
+                        if (_px1 > w) _px1 = w;
+                        
+                        int _y0 = y0 + delta->y0, _py0 = _y0 >> subpixel_shift;
+                        int _y1 = y1 - delta->y1, _py1 = _y1 >> subpixel_shift;
+                        int _ph = _py1 - _py0;
+                        if (_py0 < ymin) _py0 = ymin;
+                        if (_py1 > h) _py1 = h;
                         
                         // Overlap/contribution test
                         if ((_px0 >= _px1) | (_py0 >= _py1)) {
@@ -1199,6 +1229,9 @@ namespace dairin0d.Octree.Rendering {
                         stack->px1 = _px1;
                         stack->py1 = _py1;
                         stack->z = z + delta->z;
+                        
+                        stack->pw = _pw;
+                        stack->ph = _ph;
                         
                         stack->level = level;
                         if (is_leaf) {
