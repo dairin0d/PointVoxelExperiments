@@ -84,6 +84,7 @@ Various ideas:
   [-] does not seem to improve performance at all
 * 2x2 nodes: precompute 4 masks (which octants fall into / intersect the
   pixels), then get nearest node via (order[node.mask & pixel.mask] & 7)
+  [+/-] improves performance, but results in noise and holes
 * store color at subnode level -> less non-coherent reads at the pixel level
 * caching nodes from previous frame (additional expense of writing the nodes
   to the cache, but more coherent memory accesses in the next frame; also,
@@ -188,15 +189,16 @@ namespace dairin0d.Octree.Rendering {
             
             splatter = new Splatter();
             
-            int root_node = 255 << 24;
+            // int root_node = 255 << 24;
+            int root_node = 0b10011001 << 24;
             test_octree = new RawOctree() {
                 root_node = root_node,
                 root_color = octree_color,
                 nodes = new int[] {
-                    root_node, root_node, root_node, root_node,
-                    root_node, root_node, root_node, root_node,
-                    // root_node, 0, 0, root_node,
-                    // root_node, 0, 0, root_node,
+                    // root_node, root_node, root_node, root_node,
+                    // root_node, root_node, root_node, root_node,
+                    root_node, 0, 0, root_node,
+                    root_node, 0, 0, root_node,
                 },
                 colors = new Color32[] {
                     octree_color, octree_color, octree_color, octree_color,
@@ -770,6 +772,12 @@ namespace dairin0d.Octree.Rendering {
         public static int CulledCount = 0;
         public static int NodeCount = 0;
         
+        struct Map4 {
+            public int m00, m10, m01, m11; // mXY
+        }
+        static Map4 baked_map4;
+        public static bool UseMap4 = false;
+        
         unsafe static Delta CalcBoundsAndDeltas(ref Matrix4x4 matrix, int subpixel_shift, float depth_scale, Delta* deltas) {
             // float Xx=matrix.m00, Yx=matrix.m01, Zx=matrix.m02, Tx=matrix.m03;
             // float Xy=matrix.m10, Yy=matrix.m11, Zy=matrix.m12, Ty=matrix.m13;
@@ -799,6 +807,8 @@ namespace dairin0d.Octree.Rendering {
             root.z = (int)((center.z-extents.z)*depth_scale + 0.5f);
             
             {
+                baked_map4 = default;
+                
                 int octant = 0;
                 for (int subZ = -1; subZ <= 1; subZ += 2) {
                     for (int subY = -1; subY <= 1; subY += 2) {
@@ -807,6 +817,21 @@ namespace dairin0d.Octree.Rendering {
                             float x = center.x + matrix.m00*subX + matrix.m01*subY + matrix.m02*subZ;
                             float y = center.y + matrix.m10*subX + matrix.m11*subY + matrix.m12*subZ;
                             float z = center.z + matrix.m20*subX + matrix.m21*subY + matrix.m22*subZ;
+                            
+                            if (x < center.x) {
+                                if (y < center.y) {
+                                    baked_map4.m00 |= (1 << octant);
+                                } else {
+                                    baked_map4.m01 |= (1 << octant);
+                                }
+                            } else {
+                                if (y < center.y) {
+                                    baked_map4.m10 |= (1 << octant);
+                                } else {
+                                    baked_map4.m11 |= (1 << octant);
+                                }
+                            }
+                            
                             int ix = (int)(x*pixel_size + 0.5f) + half_pixel;
                             int iy = (int)(y*pixel_size + 0.5f) + half_pixel;
                             int iz = (int)(z*depth_scale + 0.5f);
@@ -827,6 +852,13 @@ namespace dairin0d.Octree.Rendering {
                     }
                 }
             }
+            
+            string ws = "";
+            ws += $"{System.Convert.ToString(baked_map4.m00, 2)}, ";
+            ws += $"{System.Convert.ToString(baked_map4.m10, 2)}, ";
+            ws += $"{System.Convert.ToString(baked_map4.m01, 2)}, ";
+            ws += $"{System.Convert.ToString(baked_map4.m11, 2)}";
+            Debug.Log(ws);
             
             for (int level = 0; level < 16; ++level) {
                 var delta = deltas + (level << 3);
@@ -894,7 +926,11 @@ namespace dairin0d.Octree.Rendering {
                     stack->z = root.z;
                     stack->color = color;
                     
-                    if (RenderAlg == 1) {
+                    if (RenderAlg == 2) {
+                        UseMap4 = true;
+                        Render1(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack);
+                    } else if (RenderAlg == 1) {
+                        UseMap4 = false;
                         Render1(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack);
                     } else {
                         Render0(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack);
@@ -1089,6 +1125,12 @@ namespace dairin0d.Octree.Rendering {
             var node = nodes;
             var color = colors;
             
+            var map4 = baked_map4;
+            int mask_map = 0;
+            bool use_map4 = UseMap4;
+            
+            int cnt_miss = 0;
+            
             while (stack_top >= 0) {
                 ++NodeCount;
                 
@@ -1132,48 +1174,190 @@ namespace dairin0d.Octree.Rendering {
                 }
                 
                 if ((current->pw <= 2) & (current->ph <= 2)) {
-                    // ++QuadCount;
-                    
-                    int mask = (current->node >> 24) & 0xFF;
-                    bool is_leaf = (mask == 0);
-                    if (is_leaf) {
-                        queue = queues[forward_key | 255] & 0x0FFFFFFF;
-                    } else {
-                        queue = queues[forward_key | mask];
-                        int offset = (current->node & 0xFFFFFF) << 3;
-                        color = colors + offset;
-                    }
-                    
-                    int x0 = current->x0, y0 = current->y0;
-                    int x1 = current->x1, y1 = current->y1;
-                    int x = current->x0 + current->x1 - pixel_size;
-                    int y = current->y0 + current->y1 - pixel_size;
-                    int subpixel_shift1 = subpixel_shift+1;
-                    int z = current->z, ymin = current->py0;
-                    var level_deltas = deltas + (current->level << 3);
-                    
-                    for (; queue != 0; queue >>= 4) {
-                        int octant = (int)(queue & 7);
+                    if (use_map4) {
+                        ++QuadCount;
                         
-                        var delta = level_deltas + octant;
+                        int x = current->x0 >> subpixel_shift;
+                        int y = current->y0 >> subpixel_shift;
                         
-                        int px = (x + delta->x01) >> subpixel_shift1;
-                        int py = (y + delta->y01) >> subpixel_shift1;
-                        if ((px < 0) | (py < ymin) | (px >= w) | (py >= h)) continue;
-                        int pz = z + delta->z;
+                        if ((x < 0) | (x >= w-2)) continue;
+                        if ((y < 0) | (y >= h-2)) continue;
                         
-                        var tile_x = tile + px + (py << tile_shift);
-                        if (tile_x->depth > pz) {
-                            tile_x->depth = pz;
-                            if (is_leaf) {
-                                tile_x->color = current->color;
-                            } else {
-                                tile_x->color = color[octant];
+                        int mask = (current->node >> 24) & 0xFF;
+                        bool is_leaf = (mask == 0);
+                        if (is_leaf) {
+                            mask = 255;
+                        } else {
+                            int offset = (current->node & 0xFFFFFF) << 3;
+                            color = colors + offset;
+                        }
+                        
+                        int z = current->z;
+                        var pixel = tile + (x + (y << tile_shift));
+                        
+                        if (current->pw == 1) {
+                            int cnt = 0;
+                            mask_map = mask & (map4.m00 | map4.m01);
+                            if (mask_map != 0) {
+                                ++cnt;
+                                if (pixel->depth > z) {
+                                    pixel->depth = z;
+                                    if (is_leaf) {
+                                        pixel->color = current->color;
+                                    } else {
+                                        pixel->color = color[queues[forward_key | mask_map] & 7];
+                                    }
+                                }
+                            }
+                            ++pixel;
+                            mask_map = mask & (map4.m10 | map4.m11);
+                            if (mask_map != 0) {
+                                ++cnt;
+                                if (pixel->depth > z) {
+                                    pixel->depth = z;
+                                    if (is_leaf) {
+                                        pixel->color = current->color;
+                                    } else {
+                                        pixel->color = color[queues[forward_key | mask_map] & 7];
+                                    }
+                                }
+                            }
+                            if (cnt < 2) {
+                                ++cnt_miss;
+                            }
+                        } else if (current->ph == 1) {
+                            int cnt = 0;
+                            mask_map = mask & (map4.m00 | map4.m10);
+                            if (mask_map != 0) {
+                                ++cnt;
+                                if (pixel->depth > z) {
+                                    pixel->depth = z;
+                                    if (is_leaf) {
+                                        pixel->color = current->color;
+                                    } else {
+                                        pixel->color = color[queues[forward_key | mask_map] & 7];
+                                    }
+                                }
+                            }
+                            pixel += row;
+                            mask_map = mask & (map4.m01 | map4.m11);
+                            if (mask_map != 0) {
+                                ++cnt;
+                                if (pixel->depth > z) {
+                                    pixel->depth = z;
+                                    if (is_leaf) {
+                                        pixel->color = current->color;
+                                    } else {
+                                        pixel->color = color[queues[forward_key | mask_map] & 7];
+                                    }
+                                }
+                            }
+                            if (cnt < 2) {
+                                ++cnt_miss;
+                            }
+                        } else {
+                            int cnt = 0;
+                            mask_map = mask & map4.m00;
+                            if (mask_map != 0) {
+                                ++cnt;
+                                if (pixel->depth > z) {
+                                    pixel->depth = z;
+                                    if (is_leaf) {
+                                        pixel->color = current->color;
+                                    } else {
+                                        pixel->color = color[queues[forward_key | mask_map] & 7];
+                                    }
+                                }
+                            }
+                            ++pixel;
+                            mask_map = mask & map4.m10;
+                            if (mask_map != 0) {
+                                ++cnt;
+                                if (pixel->depth > z) {
+                                    pixel->depth = z;
+                                    if (is_leaf) {
+                                        pixel->color = current->color;
+                                    } else {
+                                        pixel->color = color[queues[forward_key | mask_map] & 7];
+                                    }
+                                }
+                            }
+                            pixel += row - 1;
+                            mask_map = mask & map4.m01;
+                            if (mask_map != 0) {
+                                ++cnt;
+                                if (pixel->depth > z) {
+                                    pixel->depth = z;
+                                    if (is_leaf) {
+                                        pixel->color = current->color;
+                                    } else {
+                                        pixel->color = color[queues[forward_key | mask_map] & 7];
+                                    }
+                                }
+                            }
+                            ++pixel;
+                            mask_map = mask & map4.m11;
+                            if (mask_map != 0) {
+                                ++cnt;
+                                if (pixel->depth > z) {
+                                    pixel->depth = z;
+                                    if (is_leaf) {
+                                        pixel->color = current->color;
+                                    } else {
+                                        pixel->color = color[queues[forward_key | mask_map] & 7];
+                                    }
+                                }
+                            }
+                            if (cnt < 4) {
+                                ++cnt_miss;
                             }
                         }
+                        
+                        continue;
+                    } else {
+                        ++QuadCount;
+                        
+                        int mask = (current->node >> 24) & 0xFF;
+                        bool is_leaf = (mask == 0);
+                        if (is_leaf) {
+                            queue = queues[forward_key | 255] & 0x0FFFFFFF;
+                        } else {
+                            queue = queues[forward_key | mask];
+                            int offset = (current->node & 0xFFFFFF) << 3;
+                            color = colors + offset;
+                        }
+                        
+                        int x0 = current->x0, y0 = current->y0;
+                        int x1 = current->x1, y1 = current->y1;
+                        int x = current->x0 + current->x1 - pixel_size;
+                        int y = current->y0 + current->y1 - pixel_size;
+                        int subpixel_shift1 = subpixel_shift+1;
+                        int z = current->z, ymin = current->py0;
+                        var level_deltas = deltas + (current->level << 3);
+                        
+                        for (; queue != 0; queue >>= 4) {
+                            int octant = (int)(queue & 7);
+                            
+                            var delta = level_deltas + octant;
+                            
+                            int px = (x + delta->x01) >> subpixel_shift1;
+                            int py = (y + delta->y01) >> subpixel_shift1;
+                            if ((px < 0) | (py < ymin) | (px >= w) | (py >= h)) continue;
+                            int pz = z + delta->z;
+                            
+                            var tile_x = tile + px + (py << tile_shift);
+                            if (tile_x->depth > pz) {
+                                tile_x->depth = pz;
+                                if (is_leaf) {
+                                    tile_x->color = current->color;
+                                } else {
+                                    tile_x->color = color[octant];
+                                }
+                            }
+                        }
+                        
+                        continue;
                     }
-                    
-                    continue;
                 }
                 
                 // Add subnodes to the stack
@@ -1244,6 +1428,8 @@ namespace dairin0d.Octree.Rendering {
                     }
                 }
             }
+            
+            Debug.Log($"cnt_miss={cnt_miss}");
         }
     }
     
