@@ -74,7 +74,7 @@ Performance notes:
   in IL2CPP builds, it seems to make no difference
 * Using "not drawn test" (node.z = constant) instead of depth test slightly
   reduces the number of processed nodes, but not enough to be useful.
-* Render1 is perceivably faster than Render0 (~20%)
+* Render1 is ~20% faster than Render0 for IL2CPP, and ~10% slower for Mono.
 
 Various ideas:
 * pixels whose depth test had failed for the parent node don't need to be
