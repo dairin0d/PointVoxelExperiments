@@ -84,7 +84,7 @@ Various ideas:
   [-] does not seem to improve performance at all
 * 2x2 nodes: precompute 4 masks (which octants fall into / intersect the
   pixels), then get nearest node via (order[node.mask & pixel.mask] & 7)
-  [+/-] improves performance, but results in noise and holes
+  [+/-] improves performance, but results in holes
 * store color at subnode level -> less non-coherent reads at the pixel level
 * caching nodes from previous frame (additional expense of writing the nodes
   to the cache, but more coherent memory accesses in the next frame; also,
@@ -255,7 +255,7 @@ namespace dairin0d.Octree.Rendering {
                 y -= lh;
             }
             
-            DrawBox(new Rect(Screen.width - bw, Screen.height-lh*10, bw, Screen.height));
+            DrawBox(new Rect(Screen.width - bw, Screen.height-lh*12, bw, Screen.height));
             
             x = Screen.width - bw;
             y = Screen.height - lh;
@@ -283,6 +283,11 @@ namespace dairin0d.Octree.Rendering {
                 subpixel_shift = (int)GUI.HorizontalSlider(new Rect(x, y, bw, lh), subpixel_shift, 0, 8);
                 y -= lh;
                 GUI.Label(new Rect(x, y, bw, lh), $"Subpixel: {subpixel_shift}");
+                y -= lh;
+                
+                RenderSize = (int)GUI.HorizontalSlider(new Rect(x, y, bw, lh), RenderSize/16, 0, 640/16)*16;
+                y -= lh;
+                GUI.Label(new Rect(x, y, bw, lh), $"RenderSize: {RenderSize}");
                 y -= lh;
                 
                 Splatter.UseLast = GUI.Toggle(new Rect(x, y, bw, lh), Splatter.UseLast, "Use Last");
@@ -853,13 +858,6 @@ namespace dairin0d.Octree.Rendering {
                 }
             }
             
-            string ws = "";
-            ws += $"{System.Convert.ToString(baked_map4.m00, 2)}, ";
-            ws += $"{System.Convert.ToString(baked_map4.m10, 2)}, ";
-            ws += $"{System.Convert.ToString(baked_map4.m01, 2)}, ";
-            ws += $"{System.Convert.ToString(baked_map4.m11, 2)}";
-            Debug.Log(ws);
-            
             for (int level = 0; level < 16; ++level) {
                 var delta = deltas + (level << 3);
                 var subdelta = delta + 8;
@@ -1050,7 +1048,7 @@ namespace dairin0d.Octree.Rendering {
                 int mask = (current->node >> 24) & 0xFF;
                 bool is_leaf = (mask == 0);
                 if (is_leaf) {
-                    queue = (queues[reverse_key | 255] >> 4) & 0x0FFFFFFF;
+                    queue = queues[reverse_key | 255];
                 } else {
                     queue = queues[reverse_key | mask];
                     int offset = (current->node & 0xFFFFFF) << 3;
@@ -1129,8 +1127,6 @@ namespace dairin0d.Octree.Rendering {
             int mask_map = 0;
             bool use_map4 = UseMap4;
             
-            int cnt_miss = 0;
-            
             while (stack_top >= 0) {
                 ++NodeCount;
                 
@@ -1196,40 +1192,8 @@ namespace dairin0d.Octree.Rendering {
                         var pixel = tile + (x + (y << tile_shift));
                         
                         if (current->pw == 1) {
-                            int cnt = 0;
-                            mask_map = mask & (map4.m00 | map4.m01);
-                            if (mask_map != 0) {
-                                ++cnt;
-                                if (pixel->depth > z) {
-                                    pixel->depth = z;
-                                    if (is_leaf) {
-                                        pixel->color = current->color;
-                                    } else {
-                                        pixel->color = color[queues[forward_key | mask_map] & 7];
-                                    }
-                                }
-                            }
-                            ++pixel;
-                            mask_map = mask & (map4.m10 | map4.m11);
-                            if (mask_map != 0) {
-                                ++cnt;
-                                if (pixel->depth > z) {
-                                    pixel->depth = z;
-                                    if (is_leaf) {
-                                        pixel->color = current->color;
-                                    } else {
-                                        pixel->color = color[queues[forward_key | mask_map] & 7];
-                                    }
-                                }
-                            }
-                            if (cnt < 2) {
-                                ++cnt_miss;
-                            }
-                        } else if (current->ph == 1) {
-                            int cnt = 0;
                             mask_map = mask & (map4.m00 | map4.m10);
                             if (mask_map != 0) {
-                                ++cnt;
                                 if (pixel->depth > z) {
                                     pixel->depth = z;
                                     if (is_leaf) {
@@ -1242,7 +1206,6 @@ namespace dairin0d.Octree.Rendering {
                             pixel += row;
                             mask_map = mask & (map4.m01 | map4.m11);
                             if (mask_map != 0) {
-                                ++cnt;
                                 if (pixel->depth > z) {
                                     pixel->depth = z;
                                     if (is_leaf) {
@@ -1252,14 +1215,33 @@ namespace dairin0d.Octree.Rendering {
                                     }
                                 }
                             }
-                            if (cnt < 2) {
-                                ++cnt_miss;
+                        } else if (current->ph == 1) {
+                            mask_map = mask & (map4.m00 | map4.m01);
+                            if (mask_map != 0) {
+                                if (pixel->depth > z) {
+                                    pixel->depth = z;
+                                    if (is_leaf) {
+                                        pixel->color = current->color;
+                                    } else {
+                                        pixel->color = color[queues[forward_key | mask_map] & 7];
+                                    }
+                                }
+                            }
+                            ++pixel;
+                            mask_map = mask & (map4.m10 | map4.m11);
+                            if (mask_map != 0) {
+                                if (pixel->depth > z) {
+                                    pixel->depth = z;
+                                    if (is_leaf) {
+                                        pixel->color = current->color;
+                                    } else {
+                                        pixel->color = color[queues[forward_key | mask_map] & 7];
+                                    }
+                                }
                             }
                         } else {
-                            int cnt = 0;
                             mask_map = mask & map4.m00;
                             if (mask_map != 0) {
-                                ++cnt;
                                 if (pixel->depth > z) {
                                     pixel->depth = z;
                                     if (is_leaf) {
@@ -1272,7 +1254,6 @@ namespace dairin0d.Octree.Rendering {
                             ++pixel;
                             mask_map = mask & map4.m10;
                             if (mask_map != 0) {
-                                ++cnt;
                                 if (pixel->depth > z) {
                                     pixel->depth = z;
                                     if (is_leaf) {
@@ -1285,7 +1266,6 @@ namespace dairin0d.Octree.Rendering {
                             pixel += row - 1;
                             mask_map = mask & map4.m01;
                             if (mask_map != 0) {
-                                ++cnt;
                                 if (pixel->depth > z) {
                                     pixel->depth = z;
                                     if (is_leaf) {
@@ -1298,7 +1278,6 @@ namespace dairin0d.Octree.Rendering {
                             ++pixel;
                             mask_map = mask & map4.m11;
                             if (mask_map != 0) {
-                                ++cnt;
                                 if (pixel->depth > z) {
                                     pixel->depth = z;
                                     if (is_leaf) {
@@ -1307,9 +1286,6 @@ namespace dairin0d.Octree.Rendering {
                                         pixel->color = color[queues[forward_key | mask_map] & 7];
                                     }
                                 }
-                            }
-                            if (cnt < 4) {
-                                ++cnt_miss;
                             }
                         }
                         
@@ -1320,7 +1296,7 @@ namespace dairin0d.Octree.Rendering {
                         int mask = (current->node >> 24) & 0xFF;
                         bool is_leaf = (mask == 0);
                         if (is_leaf) {
-                            queue = queues[forward_key | 255] & 0x0FFFFFFF;
+                            queue = queues[forward_key | 255];
                         } else {
                             queue = queues[forward_key | mask];
                             int offset = (current->node & 0xFFFFFF) << 3;
@@ -1365,7 +1341,7 @@ namespace dairin0d.Octree.Rendering {
                     int mask = (current->node >> 24) & 0xFF;
                     bool is_leaf = (mask == 0);
                     if (is_leaf) {
-                        queue = (queues[reverse_key | 255] >> 4) & 0x0FFFFFFF;
+                        queue = queues[reverse_key | 255];
                     } else {
                         queue = queues[reverse_key | mask];
                         int offset = (current->node & 0xFFFFFF) << 3;
@@ -1428,8 +1404,6 @@ namespace dairin0d.Octree.Rendering {
                     }
                 }
             }
-            
-            Debug.Log($"cnt_miss={cnt_miss}");
         }
     }
     
