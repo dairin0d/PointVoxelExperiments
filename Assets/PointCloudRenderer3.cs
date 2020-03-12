@@ -75,6 +75,8 @@ Performance notes:
 * Using "not drawn test" (node.z = constant) instead of depth test slightly
   reduces the number of processed nodes, but not enough to be useful.
 * Render1 is ~20% faster than Render0 for IL2CPP, and ~10% slower for Mono.
+* Raycasting without a map is several times slower than splatting
+  (porttown: around 300-350 ms at 640x480)
 
 Various ideas:
 * pixels whose depth test had failed for the parent node don't need to be
@@ -783,6 +785,26 @@ namespace dairin0d.Octree.Rendering {
         static Map4 baked_map4;
         public static bool UseMap4 = false;
         
+        public struct RayDelta {
+            public int x, y, z;
+        }
+        public static RayDelta[] ray_deltas = new RayDelta[8*32];
+        
+        public struct RayStack {
+            public int level;
+            public bool draw;
+            public int node;
+            public int offset;
+            public uint queue;
+            public int x, y, z;
+        }
+        public static RayStack[] ray_stack = new RayStack[8*32];
+        
+        public static int ray_shift = 16;
+        public static int map_shift = 3;
+        
+        public static int[] ray_map = new int[128*128]; // for testing effects of different sizes
+        
         unsafe static Delta CalcBoundsAndDeltas(ref Matrix4x4 matrix, int subpixel_shift, float depth_scale, Delta* deltas) {
             // float Xx=matrix.m00, Yx=matrix.m01, Zx=matrix.m02, Tx=matrix.m03;
             // float Xy=matrix.m10, Yy=matrix.m11, Zy=matrix.m12, Ty=matrix.m13;
@@ -814,6 +836,8 @@ namespace dairin0d.Octree.Rendering {
             {
                 baked_map4 = default;
                 
+                int ray_size = 1 << ray_shift, ray_half = ray_size >> 1, ray_max = ray_size - ray_half;
+                
                 int octant = 0;
                 for (int subZ = -1; subZ <= 1; subZ += 2) {
                     for (int subY = -1; subY <= 1; subY += 2) {
@@ -840,6 +864,13 @@ namespace dairin0d.Octree.Rendering {
                             int ix = (int)(x*pixel_size + 0.5f) + half_pixel;
                             int iy = (int)(y*pixel_size + 0.5f) + half_pixel;
                             int iz = (int)(z*depth_scale + 0.5f);
+                            
+                            float uv_x = ((x - center.x)/extents.x + 1f) * 0.25f;
+                            float uv_y = ((y - center.y)/extents.y + 1f) * 0.25f;
+                            ray_deltas[octant].x = Mathf.Clamp((int)(uv_x * ray_size), 0, ray_max);
+                            ray_deltas[octant].y = Mathf.Clamp((int)(uv_y * ray_size), 0, ray_max);
+                            ray_deltas[octant].z = Mathf.Max(iz - root.z, 0);
+                            
                             delta->x0 = ix - root.x0; if (delta->x0 < 0) delta->x0 = 0;
                             delta->y0 = iy - root.y0; if (delta->y0 < 0) delta->y0 = 0;
                             delta->x1 = root.x1 - ix; if (delta->x1 < 0) delta->x1 = 0;
@@ -924,7 +955,10 @@ namespace dairin0d.Octree.Rendering {
                     stack->z = root.z;
                     stack->color = color;
                     
-                    if (RenderAlg == 2) {
+                    if (RenderAlg == 3) {
+                        Raycast(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues,
+                            stack->x0, stack->y0, stack->x1, stack->y1, stack->z, stack->node);
+                    } else if (RenderAlg == 2) {
                         UseMap4 = true;
                         Render1(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack);
                     } else if (RenderAlg == 1) {
@@ -1401,6 +1435,117 @@ namespace dairin0d.Octree.Rendering {
                             stack->node = node[octant];
                             stack->color = color[octant];
                         }
+                    }
+                }
+            }
+        }
+        
+        unsafe static void Raycast(Buffer.DataItem* tile, int w, int h, int tile_shift,
+            int* nodes, Color32* colors, int forward_key, int subpixel_shift,
+            uint* queues, int x0, int y0, int x1, int y1, int z, int node_start)
+        {
+            int px0 = x0 >> subpixel_shift; if (px0 < 0) px0 = 0;
+            int py0 = y0 >> subpixel_shift; if (py0 < 0) py0 = 0;
+            int px1 = x1 >> subpixel_shift; if (px1 > w) px1 = w;
+            int py1 = y1 >> subpixel_shift; if (py1 > h) py1 = h;
+            if ((px0 >= px1) | (py0 >= py1)) return;
+            
+            int max_level = 0;
+            {
+                int sz = Mathf.Max(x1 - x0, y1 - y0);
+                int szm = 1 << subpixel_shift;
+                while ((sz >> max_level) > szm) ++max_level;
+            }
+            max_level = Mathf.Max(Mathf.Min(max_level, ((int)MaxLevel)-1), 0);
+            
+            int pixel_size = 1 << subpixel_shift;
+            int half_pixel = pixel_size >> 1;
+            
+            int row = 1 << tile_shift;
+            int tile_size = 1 << tile_shift;
+            
+            int ray_size = 1 << ray_shift, ray_mask = ~(ray_size - 1);
+            float x_scale = ray_size / (float)(x1 - x0);
+            float y_scale = ray_size / (float)(y1 - y0);
+            
+            float rx0 = ((px0 << subpixel_shift) + half_pixel - x0) * x_scale;
+            float ry0 = ((py0 << subpixel_shift) + half_pixel - y0) * y_scale;
+            float rx1 = ((px1 << subpixel_shift) + half_pixel - x0) * x_scale;
+            float ry1 = ((py1 << subpixel_shift) + half_pixel - y0) * y_scale;
+            float rdx = pixel_size * x_scale;
+            float rdy = pixel_size * y_scale;
+            
+            for (int i = 0; i < ray_stack.Length; ++i) {
+                ray_stack[i].level = i;
+                ray_stack[i].draw = (i >= max_level);
+            }
+            
+            fixed (RayDelta* deltas = ray_deltas)
+            fixed (RayStack* stack0 = ray_stack)
+            fixed (int* map = ray_map)
+            {
+                stack0->node = node_start;
+                stack0->offset = (stack0->node & 0xFFFFFF) << 3;
+                
+                // root is not expected to be leaf
+                int root_mask = (stack0->node >> 24) & 0xFF;
+                var root_queue = queues[forward_key | root_mask];
+                
+                stack0->z = z;
+                
+                int octant = 0;
+                int subx = 0, suby = 0, subz = 0;
+                
+                var tile_y = tile + (py0 << tile_shift);
+                for (float ry = ry0; ry < ry1; ry += rdy, tile_y += row) {
+                    stack0->y = (int)ry;
+                    
+                    var tile_x = tile_y + px0;
+                    for (float rx = rx0; rx < rx1; rx += rdx, ++tile_x) {
+                        stack0->x = (int)rx;
+                        
+                        var depth = tile_x->depth;
+                        
+                        // reset stack position and queue
+                        var stack = stack0;
+                        stack->queue = root_queue;
+                        
+                        for (;;) {
+                            while (stack->queue == 0) {
+                                if (stack == stack0) goto skip;
+                                --stack;
+                            }
+                            
+                            octant = (int)(stack->queue & 7);
+                            stack->queue >>= 4;
+                            
+                            var delta = (deltas + octant);
+                            subx = (stack->x - delta->x) << 1;
+                            suby = (stack->y - delta->y) << 1;
+                            if (((subx|suby) & ray_mask) != 0) continue;
+                            subz = stack->z + delta->z;
+                            if (subz >= depth) goto skip;
+                            
+                            if (stack->draw) goto draw;
+                            
+                            int node = *(nodes + stack->offset + octant);
+                            int mask = (node >> 24) & 0xFF;
+                            if (mask == 0) goto draw;
+                            
+                            ++stack;
+                            stack->node = node;
+                            stack->offset = (node & 0xFFFFFF) << 3;
+                            stack->queue = queues[forward_key | mask];
+                            stack->x = subx;
+                            stack->y = suby;
+                            stack->z = subz;
+                        }
+                        
+                        draw:;
+                        tile_x->depth = subz;
+                        tile_x->color = *(colors + stack->offset + octant);
+                        
+                        skip:;
                     }
                 }
             }
