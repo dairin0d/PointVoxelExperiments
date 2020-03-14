@@ -257,7 +257,7 @@ namespace dairin0d.Octree.Rendering {
                 y -= lh;
             }
             
-            DrawBox(new Rect(Screen.width - bw, Screen.height-lh*12, bw, Screen.height));
+            DrawBox(new Rect(Screen.width - bw, Screen.height-lh*14, bw, Screen.height));
             
             x = Screen.width - bw;
             y = Screen.height - lh;
@@ -274,12 +274,17 @@ namespace dairin0d.Octree.Rendering {
                 
                 Splatter.StopAt = (int)GUI.HorizontalSlider(new Rect(x, y, bw, lh), Splatter.StopAt, 0, 8);
                 y -= lh;
-                GUI.Label(new Rect(x, y, bw, lh), $"Stop At: {(int)Splatter.StopAt}");
+                GUI.Label(new Rect(x, y, bw, lh), $"Stop At: {Splatter.StopAt}");
                 y -= lh;
                 
                 Splatter.RenderAlg = (int)GUI.HorizontalSlider(new Rect(x, y, bw, lh), Splatter.RenderAlg, 0, 8);
                 y -= lh;
-                GUI.Label(new Rect(x, y, bw, lh), $"Renderer: {(int)Splatter.RenderAlg}");
+                GUI.Label(new Rect(x, y, bw, lh), $"Renderer: {Splatter.RenderAlg}");
+                y -= lh;
+                
+                Splatter.MapShift = (int)GUI.HorizontalSlider(new Rect(x, y, bw, lh), Splatter.MapShift, 3, 7);
+                y -= lh;
+                GUI.Label(new Rect(x, y, bw, lh), $"MapShift: {Splatter.MapShift}");
                 y -= lh;
                 
                 subpixel_shift = (int)GUI.HorizontalSlider(new Rect(x, y, bw, lh), subpixel_shift, 0, 8);
@@ -785,6 +790,9 @@ namespace dairin0d.Octree.Rendering {
         static Map4 baked_map4;
         public static bool UseMap4 = false;
         
+        public static int MapShift = 5;
+        public static bool UseMap = false;
+        
         public struct RayDelta {
             public int x, y, z;
         }
@@ -838,6 +846,10 @@ namespace dairin0d.Octree.Rendering {
                 
                 int ray_size = 1 << ray_shift, ray_half = ray_size >> 1, ray_max = ray_size - ray_half;
                 
+                int map_size = 1 << MapShift;
+                float map_offset = 1f / map_size; // combined effect of (margin - margin*0.5)
+                float map_scale = (map_size - 4f) / map_size;
+                
                 int octant = 0;
                 for (int subZ = -1; subZ <= 1; subZ += 2) {
                     for (int subY = -1; subY <= 1; subY += 2) {
@@ -867,9 +879,13 @@ namespace dairin0d.Octree.Rendering {
                             
                             float uv_x = ((x - center.x)/extents.x + 1f) * 0.25f;
                             float uv_y = ((y - center.y)/extents.y + 1f) * 0.25f;
+                            if (UseMap) {
+                                uv_x = uv_x * map_scale + map_offset;
+                                uv_y = uv_y * map_scale + map_offset;
+                            }
                             ray_deltas[octant].x = Mathf.Clamp((int)(uv_x * ray_size), 0, ray_max);
                             ray_deltas[octant].y = Mathf.Clamp((int)(uv_y * ray_size), 0, ray_max);
-                            ray_deltas[octant].z = Mathf.Max(iz - root.z, 0);
+                            ray_deltas[octant].z = Mathf.Max(iz - root.z, 0) >> 1;
                             
                             delta->x0 = ix - root.x0; if (delta->x0 < 0) delta->x0 = 0;
                             delta->y0 = iy - root.y0; if (delta->y0 < 0) delta->y0 = 0;
@@ -903,7 +919,122 @@ namespace dairin0d.Octree.Rendering {
                 }
             }
             
+            if (UseMap) RasterizeMap(ref matrix);
+            
             return root;
+        }
+        
+        static void RasterizeMap(ref Matrix4x4 matrix) {
+            int buf_shift = MapShift;
+            int w = 1 << MapShift;
+            int h = 1 << MapShift;
+            
+            if ((w <= 4) | (h <= 4)) return;
+            
+            int subpixel_shift = 8;
+            int pixel_size = (1 << subpixel_shift), half_pixel = pixel_size >> 1;
+            
+            var extents = new Vector2 {
+                x = (matrix.m00 < 0f ? -matrix.m00 : matrix.m00) +
+                (matrix.m01 < 0f ? -matrix.m01 : matrix.m01) +
+                (matrix.m02 < 0f ? -matrix.m02 : matrix.m02),
+                y = (matrix.m10 < 0f ? -matrix.m10 : matrix.m10) +
+                (matrix.m11 < 0f ? -matrix.m11 : matrix.m11) +
+                (matrix.m12 < 0f ? -matrix.m12 : matrix.m12),
+            };
+            
+            int margin = 2;
+            float scale_x = pixel_size * (w * 0.5f - margin) / extents.x;
+            float scale_y = pixel_size * (h * 0.5f - margin) / extents.y;
+            
+            int Xx=(int)(matrix.m00*scale_x), Yx=(int)(matrix.m01*scale_x), Zx=(int)(matrix.m02*scale_x), Tx=(int)((w * 0.5f)*pixel_size);
+            int Xy=(int)(matrix.m10*scale_y), Yy=(int)(matrix.m11*scale_y), Zy=(int)(matrix.m12*scale_y), Ty=(int)((h * 0.5f)*pixel_size);
+
+            int extents_x = (Xx < 0 ? -Xx : Xx) + (Yx < 0 ? -Yx : Yx) + (Zx < 0 ? -Zx : Zx);
+            int extents_y = (Xy < 0 ? -Xy : Xy) + (Yy < 0 ? -Yy : Yy) + (Zy < 0 ? -Zy : Zy);
+            extents_x >>= 1;
+            extents_y >>= 1;
+
+            var nX = (new Vector2(-Xy, Xx));
+            if (nX.x < 0) nX.x = -nX.x; if (nX.y < 0) nX.y = -nX.y;
+            var nY = (new Vector2(-Yy, Yx));
+            if (nY.x < 0) nY.x = -nY.x; if (nY.y < 0) nY.y = -nY.y;
+            var nZ = (new Vector2(-Zy, Zx));
+            if (nZ.x < 0) nZ.x = -nZ.x; if (nZ.y < 0) nZ.y = -nZ.y;
+
+            Tx -= half_pixel;
+            Ty -= half_pixel;
+
+            int dotXM = Mathf.Max(Mathf.Abs(Xx*(Yy+Zy) - Xy*(Yx+Zx)), Mathf.Abs(Xx*(Yy-Zy) - Xy*(Yx-Zx)));
+            int dotYM = Mathf.Max(Mathf.Abs(Yx*(Xy+Zy) - Yy*(Xx+Zx)), Mathf.Abs(Yx*(Xy-Zy) - Yy*(Xx-Zx)));
+            int dotZM = Mathf.Max(Mathf.Abs(Zx*(Xy+Yy) - Zy*(Xx+Yx)), Mathf.Abs(Zx*(Xy-Yy) - Zy*(Xx-Yx)));
+
+            dotXM >>= 1;
+            dotYM >>= 1;
+            dotZM >>= 1;
+
+            dotXM += (int)((nX.x + nX.y) * half_pixel + 0.5f);
+            dotYM += (int)((nY.x + nY.y) * half_pixel + 0.5f);
+            dotZM += (int)((nZ.x + nZ.y) * half_pixel + 0.5f);
+
+            int dotXdx = -Xy << subpixel_shift;
+            int dotXdy = Xx << subpixel_shift;
+            int dotYdx = -Yy << subpixel_shift;
+            int dotYdy = Yx << subpixel_shift;
+            int dotZdx = -Zy << subpixel_shift;
+            int dotZdy = Zx << subpixel_shift;
+            
+            for (int i = 0; i < ray_map.Length; ++i) {
+                ray_map[i] = 0;
+            }
+            
+            int octant = 0;
+            for (int subZ = -1; subZ <= 1; subZ += 2) {
+                for (int subY = -1; subY <= 1; subY += 2) {
+                    for (int subX = -1; subX <= 1; subX += 2) {
+                        int dx = (Xx*subX + Yx*subY + Zx*subZ) >> 1;
+                        int dy = (Xy*subX + Yy*subY + Zy*subZ) >> 1;
+                        int cx = Tx + dx;
+                        int cy = Ty + dy;
+                        
+                        int xmin = Mathf.Max(((cx-extents_x) >> subpixel_shift) - 2, margin);
+                        int ymin = Mathf.Max(((cy-extents_y) >> subpixel_shift) - 2, margin);
+                        int xmax = Mathf.Min(((cx+extents_x) >> subpixel_shift) + 2, w-margin);
+                        int ymax = Mathf.Min(((cy+extents_y) >> subpixel_shift) + 2, h-margin);
+                        
+                        int offset_x = (xmin << subpixel_shift) - cx;
+                        int offset_y = (ymin << subpixel_shift) - cy;
+                        
+                        int dotXr = Xx*offset_y - Xy*offset_x;
+                        int dotYr = Yx*offset_y - Yy*offset_x;
+                        int dotZr = Zx*offset_y - Zy*offset_x;
+                        
+                        int mask = 1 << octant;
+                        
+                        for (int iy = ymin; iy < ymax; ++iy) {
+                            int ixy0 = (iy << buf_shift) + xmin;
+                            int ixy1 = (iy << buf_shift) + xmax;
+                            int dotX = dotXr;
+                            int dotY = dotYr;
+                            int dotZ = dotZr;
+                            for (int ixy = ixy0; ixy < ixy1; ++ixy) {
+                                //if ((dotX<=dotXM)&(-dotX<=dotXM) & (dotY<=dotYM)&(-dotY<=dotYM) & (dotZ<=dotZM)&(-dotZ<=dotZM)) { // a bit slower
+                                if (((dotX^(dotX>>31)) <= dotXM) & ((dotY^(dotY>>31)) <= dotYM) & ((dotZ^(dotZ>>31)) <= dotZM)) { // a bit faster
+                                    ray_map[ixy] |= mask;
+                                }
+                                dotX += dotXdx;
+                                dotY += dotYdx;
+                                dotZ += dotZdx;
+                            }
+                            dotXr += dotXdy;
+                            dotYr += dotYdy;
+                            dotZr += dotZdy;
+                        }
+                        
+                        ++octant;
+                    }
+                }
+            }
         }
         
         public unsafe static void Render(Buffer.DataItem* buf, int w, int h, int tile_shift,
@@ -911,6 +1042,8 @@ namespace dairin0d.Octree.Rendering {
             ref Matrix4x4 matrix, int subpixel_shift, float depth_scale,
             uint* queues, Delta* deltas, StackEntry* stack)
         {
+            UseMap = (RenderAlg == 4);
+            
             var root = CalcBoundsAndDeltas(ref matrix, subpixel_shift, depth_scale, deltas);
             
             if (root.x1 < 0) return;
@@ -955,7 +1088,10 @@ namespace dairin0d.Octree.Rendering {
                     stack->z = root.z;
                     stack->color = color;
                     
-                    if (RenderAlg == 3) {
+                    if (RenderAlg == 4) {
+                        Raycast(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues,
+                            stack->x0, stack->y0, stack->x1, stack->y1, stack->z, stack->node);
+                    } else if (RenderAlg == 3) {
                         Raycast(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues,
                             stack->x0, stack->y0, stack->x1, stack->y1, stack->z, stack->node);
                     } else if (RenderAlg == 2) {
@@ -1468,10 +1604,21 @@ namespace dairin0d.Octree.Rendering {
             float x_scale = ray_size / (float)(x1 - x0);
             float y_scale = ray_size / (float)(y1 - y0);
             
-            float rx0 = ((px0 << subpixel_shift) + half_pixel - x0) * x_scale;
-            float ry0 = ((py0 << subpixel_shift) + half_pixel - y0) * y_scale;
-            float rx1 = ((px1 << subpixel_shift) + half_pixel - x0) * x_scale;
-            float ry1 = ((py1 << subpixel_shift) + half_pixel - y0) * y_scale;
+            int map_size = 1 << MapShift;
+            float map_scale = (map_size - 4f) / map_size;
+            int ray_map_shift = ray_shift - MapShift;
+            
+            float r_offset = 0;
+            if (UseMap) {
+                x_scale *= map_scale;
+                y_scale *= map_scale;
+                r_offset = ray_size * (2f / map_size);
+            }
+            
+            float rx0 = ((px0 << subpixel_shift) + half_pixel - x0) * x_scale + r_offset;
+            float ry0 = ((py0 << subpixel_shift) + half_pixel - y0) * y_scale + r_offset;
+            float rx1 = ((px1 << subpixel_shift) + half_pixel - x0) * x_scale + r_offset;
+            float ry1 = ((py1 << subpixel_shift) + half_pixel - y0) * y_scale + r_offset;
             float rdx = pixel_size * x_scale;
             float rdy = pixel_size * y_scale;
             
@@ -1508,37 +1655,86 @@ namespace dairin0d.Octree.Rendering {
                         
                         // reset stack position and queue
                         var stack = stack0;
-                        stack->queue = root_queue;
                         
-                        for (;;) {
-                            while (stack->queue == 0) {
-                                if (stack == stack0) goto skip;
-                                --stack;
+                        if (UseMap) {
+                            int map_x = stack->x >> ray_map_shift;
+                            int map_y = stack->y >> ray_map_shift;
+                            int map_mask = map[map_x | (map_y << MapShift)];
+                            stack->queue = queues[forward_key | (root_mask & map_mask)];
+                            
+                            for (;;) {
+                                while (stack->queue == 0) {
+                                    if (stack == stack0) goto skip;
+                                    --stack;
+                                }
+                                
+                                octant = (int)(stack->queue & 7);
+                                stack->queue >>= 4;
+                                
+                                var delta = (deltas + octant);
+                                subx = (stack->x - delta->x) << 1;
+                                suby = (stack->y - delta->y) << 1;
+                                // subx & suby can still end up outside,
+                                // possibly due to discrepancy between
+                                // rasterization and delta
+                                if (((subx|suby) & ray_mask) != 0) continue;
+                                
+                                map_x = subx >> ray_map_shift;
+                                map_y = suby >> ray_map_shift;
+                                map_mask = map[map_x | (map_y << MapShift)];
+                                if (map_mask == 0) continue;
+                                
+                                subz = stack->z + (delta->z >> stack->level);
+                                if (subz >= depth) goto skip;
+                                
+                                if (stack->draw) goto draw;
+                                
+                                int node = *(nodes + stack->offset + octant);
+                                int mask = (node >> 24) & 0xFF;
+                                if (mask == 0) goto draw;
+                                
+                                ++stack;
+                                stack->node = node;
+                                stack->offset = (node & 0xFFFFFF) << 3;
+                                stack->queue = queues[forward_key | (mask & map_mask)];
+                                stack->x = subx;
+                                stack->y = suby;
+                                stack->z = subz;
                             }
+                        } else {
+                            stack->queue = root_queue;
                             
-                            octant = (int)(stack->queue & 7);
-                            stack->queue >>= 4;
-                            
-                            var delta = (deltas + octant);
-                            subx = (stack->x - delta->x) << 1;
-                            suby = (stack->y - delta->y) << 1;
-                            if (((subx|suby) & ray_mask) != 0) continue;
-                            subz = stack->z + delta->z;
-                            if (subz >= depth) goto skip;
-                            
-                            if (stack->draw) goto draw;
-                            
-                            int node = *(nodes + stack->offset + octant);
-                            int mask = (node >> 24) & 0xFF;
-                            if (mask == 0) goto draw;
-                            
-                            ++stack;
-                            stack->node = node;
-                            stack->offset = (node & 0xFFFFFF) << 3;
-                            stack->queue = queues[forward_key | mask];
-                            stack->x = subx;
-                            stack->y = suby;
-                            stack->z = subz;
+                            for (;;) {
+                                while (stack->queue == 0) {
+                                    if (stack == stack0) goto skip;
+                                    --stack;
+                                }
+                                
+                                octant = (int)(stack->queue & 7);
+                                stack->queue >>= 4;
+                                
+                                var delta = (deltas + octant);
+                                subx = (stack->x - delta->x) << 1;
+                                suby = (stack->y - delta->y) << 1;
+                                if (((subx|suby) & ray_mask) != 0) continue;
+                                
+                                subz = stack->z + (delta->z >> stack->level);
+                                if (subz >= depth) goto skip;
+                                
+                                if (stack->draw) goto draw;
+                                
+                                int node = *(nodes + stack->offset + octant);
+                                int mask = (node >> 24) & 0xFF;
+                                if (mask == 0) goto draw;
+                                
+                                ++stack;
+                                stack->node = node;
+                                stack->offset = (node & 0xFFFFFF) << 3;
+                                stack->queue = queues[forward_key | mask];
+                                stack->x = subx;
+                                stack->y = suby;
+                                stack->z = subz;
+                            }
                         }
                         
                         draw:;

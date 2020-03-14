@@ -219,43 +219,62 @@ public class HexagonRasterizationTest : MonoBehaviour {
 	}
 
 	void Render(Matrix4x4 matrix, BufData[] buf, int buf_shift, int w, int h) {
+		if ((w <= 4) | (h <= 4)) return;
+		
 		int subpixel_shift = 8;
-		int pix = (1 << subpixel_shift), pix_half = pix >> 1;
-		int xX=(int)(matrix.m00*pix), xY=(int)(matrix.m01*pix), xZ=(int)(matrix.m02*pix), xT=(int)(matrix.m03*pix);
-		int yX=(int)(matrix.m10*pix), yY=(int)(matrix.m11*pix), yZ=(int)(matrix.m12*pix), yT=(int)(matrix.m13*pix);
+		int pixel_size = (1 << subpixel_shift), half_pixel = pixel_size >> 1;
+		
+		var extents = new Vector2 {
+			x = (matrix.m00 < 0f ? -matrix.m00 : matrix.m00) +
+			(matrix.m01 < 0f ? -matrix.m01 : matrix.m01) +
+			(matrix.m02 < 0f ? -matrix.m02 : matrix.m02),
+			y = (matrix.m10 < 0f ? -matrix.m10 : matrix.m10) +
+			(matrix.m11 < 0f ? -matrix.m11 : matrix.m11) +
+			(matrix.m12 < 0f ? -matrix.m12 : matrix.m12),
+		};
+		
+		int margin = 2;
+		float scale_x = pixel_size * (w * 0.5f - margin) / extents.x;
+		float scale_y = pixel_size * (h * 0.5f - margin) / extents.y;
+		
+		// int Xx=(int)(matrix.m00*pixel_size), Yx=(int)(matrix.m01*pixel_size), Zx=(int)(matrix.m02*pixel_size), Tx=(int)(matrix.m03*pixel_size);
+		// int Xy=(int)(matrix.m10*pixel_size), Yy=(int)(matrix.m11*pixel_size), Zy=(int)(matrix.m12*pixel_size), Ty=(int)(matrix.m13*pixel_size);
+		int Xx=(int)(matrix.m00*scale_x), Yx=(int)(matrix.m01*scale_x), Zx=(int)(matrix.m02*scale_x), Tx=(int)((w * 0.5f)*pixel_size);
+		int Xy=(int)(matrix.m10*scale_y), Yy=(int)(matrix.m11*scale_y), Zy=(int)(matrix.m12*scale_y), Ty=(int)((h * 0.5f)*pixel_size);
 
-		var nX = (new Vector2(-yX, xX));
+		int extents_x = (Xx < 0 ? -Xx : Xx) + (Yx < 0 ? -Yx : Yx) + (Zx < 0 ? -Zx : Zx);
+		int extents_y = (Xy < 0 ? -Xy : Xy) + (Yy < 0 ? -Yy : Yy) + (Zy < 0 ? -Zy : Zy);
+		extents_x >>= 1;
+		extents_y >>= 1;
+
+		var nX = (new Vector2(-Xy, Xx));
 		if (nX.x < 0) nX.x = -nX.x; if (nX.y < 0) nX.y = -nX.y;
-		var nY = (new Vector2(-yY, xY));
+		var nY = (new Vector2(-Yy, Yx));
 		if (nY.x < 0) nY.x = -nY.x; if (nY.y < 0) nY.y = -nY.y;
-		var nZ = (new Vector2(-yZ, xZ));
+		var nZ = (new Vector2(-Zy, Zx));
 		if (nZ.x < 0) nZ.x = -nZ.x; if (nZ.y < 0) nZ.y = -nZ.y;
 
-		xT -= pix_half;
-		yT -= pix_half;
+		Tx -= half_pixel;
+		Ty -= half_pixel;
 
-		int dotXM = Mathf.Max(Mathf.Abs(xX*(yY+yZ) - yX*(xY+xZ)), Mathf.Abs(xX*(yY-yZ) - yX*(xY-xZ)));
-		int dotYM = Mathf.Max(Mathf.Abs(xY*(yX+yZ) - yY*(xX+xZ)), Mathf.Abs(xY*(yX-yZ) - yY*(xX-xZ)));
-		int dotZM = Mathf.Max(Mathf.Abs(xZ*(yX+yY) - yZ*(xX+xY)), Mathf.Abs(xZ*(yX-yY) - yZ*(xX-xY)));
+		int dotXM = Mathf.Max(Mathf.Abs(Xx*(Yy+Zy) - Xy*(Yx+Zx)), Mathf.Abs(Xx*(Yy-Zy) - Xy*(Yx-Zx)));
+		int dotYM = Mathf.Max(Mathf.Abs(Yx*(Xy+Zy) - Yy*(Xx+Zx)), Mathf.Abs(Yx*(Xy-Zy) - Yy*(Xx-Zx)));
+		int dotZM = Mathf.Max(Mathf.Abs(Zx*(Xy+Yy) - Zy*(Xx+Yx)), Mathf.Abs(Zx*(Xy-Yy) - Zy*(Xx-Yx)));
 
 		dotXM >>= 1;
 		dotYM >>= 1;
 		dotZM >>= 1;
 
-		dotXM += (int)((nX.x + nX.y) * pix_half + 0.5f);
-		dotYM += (int)((nY.x + nY.y) * pix_half + 0.5f);
-		dotZM += (int)((nZ.x + nZ.y) * pix_half + 0.5f);
+		dotXM += (int)((nX.x + nX.y) * half_pixel + 0.5f);
+		dotYM += (int)((nY.x + nY.y) * half_pixel + 0.5f);
+		dotZM += (int)((nZ.x + nZ.y) * half_pixel + 0.5f);
 
-		var c = default(Color32);
-		c.a = 255;
-		c.g = 255;
-
-		int dotXdx = -yX << subpixel_shift;
-		int dotXdy = xX << subpixel_shift;
-		int dotYdx = -yY << subpixel_shift;
-		int dotYdy = xY << subpixel_shift;
-		int dotZdx = -yZ << subpixel_shift;
-		int dotZdy = xZ << subpixel_shift;
+		int dotXdx = -Xy << subpixel_shift;
+		int dotXdy = Xx << subpixel_shift;
+		int dotYdx = -Yy << subpixel_shift;
+		int dotYdy = Yx << subpixel_shift;
+		int dotZdx = -Zy << subpixel_shift;
+		int dotZdy = Zx << subpixel_shift;
 		
 		for (int i = 0; i < buf.Length; ++i) {
 			buf[i].zi = 0;
@@ -265,22 +284,31 @@ public class HexagonRasterizationTest : MonoBehaviour {
 		for (int subZ = -1; subZ <= 1; subZ += 2) {
 			for (int subY = -1; subY <= 1; subY += 2) {
 				for (int subX = -1; subX <= 1; subX += 2) {
-					int cx = xT + ((xX*subX + xY*subY + xZ*subZ) >> 1);
-					int cy = yT + ((yX*subX + yY*subY + yZ*subZ) >> 1);
+					int dx = (Xx*subX + Yx*subY + Zx*subZ) >> 1;
+					int dy = (Xy*subX + Yy*subY + Zy*subZ) >> 1;
+					int cx = Tx + dx;
+					int cy = Ty + dy;
 					
-					int dotXr = xX*(0-cy) - yX*(0-cx);
-					int dotYr = xY*(0-cy) - yY*(0-cx);
-					int dotZr = xZ*(0-cy) - yZ*(0-cx);
+					int xmin = Mathf.Max(((cx-extents_x) >> subpixel_shift) - 2, margin);
+					int ymin = Mathf.Max(((cy-extents_y) >> subpixel_shift) - 2, margin);
+					int xmax = Mathf.Min(((cx+extents_x) >> subpixel_shift) + 2, w-margin);
+					int ymax = Mathf.Min(((cy+extents_y) >> subpixel_shift) + 2, h-margin);
+					
+					int offset_x = (xmin << subpixel_shift) - cx;
+					int offset_y = (ymin << subpixel_shift) - cy;
+					
+					int dotXr = Xx*offset_y - Xy*offset_x;
+					int dotYr = Yx*offset_y - Yy*offset_x;
+					int dotZr = Zx*offset_y - Zy*offset_x;
 					
 					int mask = 1 << octant;
 					
-					for (int iy = 0; iy < h; ++iy) {
-						int ixy0 = (iy << buf_shift);
-						int ixy1 = ixy0+w;
+					for (int iy = ymin; iy < ymax; ++iy) {
+						int ixy0 = (iy << buf_shift) + xmin;
+						int ixy1 = (iy << buf_shift) + xmax;
 						int dotX = dotXr;
 						int dotY = dotYr;
 						int dotZ = dotZr;
-						//for (int ix = 0; ix < w; ++ix) {
 						for (int ixy = ixy0; ixy < ixy1; ++ixy) {
 							//if ((dotX<=dotXM)&(-dotX<=dotXM) & (dotY<=dotYM)&(-dotY<=dotYM) & (dotZ<=dotZM)&(-dotZ<=dotZM)) { // a bit slower
 							if (((dotX^(dotX>>31)) <= dotXM) & ((dotY^(dotY>>31)) <= dotYM) & ((dotZ^(dotZ>>31)) <= dotZM)) { // a bit faster
