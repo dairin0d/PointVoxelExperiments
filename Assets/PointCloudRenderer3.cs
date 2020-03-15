@@ -270,6 +270,10 @@ namespace dairin0d.Octree.Rendering {
             
             GUI.DrawTexture(cam.pixelRect, tex, ScaleMode.StretchToFill, true);
             
+            if (GUI.Button(new Rect(Screen.width-bw, 0, bw, lh), "Fullscreen")) {
+                Screen.fullScreen = !Screen.fullScreen;
+            }
+            
             DrawBox(new Rect(0, Screen.height-lh*7, bw, Screen.height));
             
             x = 0;
@@ -280,16 +284,25 @@ namespace dairin0d.Octree.Rendering {
                 GUI.Label(new Rect(x, y, Screen.width, lh), info);
                 y -= lh;
                 
-                GUI.Label(new Rect(x, y, Screen.width, lh), $"PixelCount={Splatter.PixelCount}");
-                y -= lh;
-                GUI.Label(new Rect(x, y, Screen.width, lh), $"QuadCount={Splatter.QuadCount}");
-                y -= lh;
-                GUI.Label(new Rect(x, y, Screen.width, lh), $"CulledCount={Splatter.CulledCount}");
-                y -= lh;
-                GUI.Label(new Rect(x, y, Screen.width, lh), $"OccludedCount={Splatter.OccludedCount}");
-                y -= lh;
-                GUI.Label(new Rect(x, y, Screen.width, lh), $"NodeCount={Splatter.NodeCount}");
-                y -= lh;
+                if ((Splatter.RenderAlg == 3) | (Splatter.RenderAlg == 4)) {
+                    GUI.Label(new Rect(x, y, Screen.width, lh), $"ComplexityMax={Splatter.ComplexityMax}");
+                    y -= lh;
+                    float avg = Splatter.ComplexitySum;
+                    if (Splatter.ComplexityCnt > 0) avg /= Splatter.ComplexityCnt;
+                    GUI.Label(new Rect(x, y, Screen.width, lh), $"ComplexityAvg={avg}");
+                    y -= lh;
+                } else {
+                    GUI.Label(new Rect(x, y, Screen.width, lh), $"PixelCount={Splatter.PixelCount}");
+                    y -= lh;
+                    GUI.Label(new Rect(x, y, Screen.width, lh), $"QuadCount={Splatter.QuadCount}");
+                    y -= lh;
+                    GUI.Label(new Rect(x, y, Screen.width, lh), $"CulledCount={Splatter.CulledCount}");
+                    y -= lh;
+                    GUI.Label(new Rect(x, y, Screen.width, lh), $"OccludedCount={Splatter.OccludedCount}");
+                    y -= lh;
+                    GUI.Label(new Rect(x, y, Screen.width, lh), $"NodeCount={Splatter.NodeCount}");
+                    y -= lh;
+                }
             }
             
             DrawBox(new Rect(Screen.width - bw, Screen.height-lh*14, bw, Screen.height));
@@ -435,6 +448,10 @@ namespace dairin0d.Octree.Rendering {
             Splatter.CulledCount = 0;
             Splatter.OccludedCount = 0;
             Splatter.NodeCount = 0;
+            
+            Splatter.ComplexityMax = 0;
+            Splatter.ComplexitySum = 0;
+            Splatter.ComplexityCnt = 0;
             
             buffer.Clear(cam.backgroundColor);
             RenderObjects();
@@ -847,6 +864,10 @@ namespace dairin0d.Octree.Rendering {
         public static int map_shift = 3;
         
         public static int[] ray_map = new int[128*128]; // for testing effects of different sizes
+        
+        public static int ComplexityMax = 0;
+        public static int ComplexitySum = 0;
+        public static int ComplexityCnt = 0;
         
         unsafe static Delta CalcBoundsAndDeltas(ref Matrix4x4 matrix, int subpixel_shift, float depth_scale, Delta* deltas) {
             // float Xx=matrix.m00, Yx=matrix.m01, Zx=matrix.m02, Tx=matrix.m03;
@@ -1686,6 +1707,8 @@ namespace dairin0d.Octree.Rendering {
                     for (var rx = rx0; rx < rx1; rx += rdx, ++tile_x) {
                         stack0->x = (int)rx;
                         
+                        int complexity = 0;
+                        
                         var depth = tile_x->depth;
                         
                         if (stack0->z >= depth) goto skip;
@@ -1700,6 +1723,8 @@ namespace dairin0d.Octree.Rendering {
                             stack->queue = queues[forward_key | (root_mask & map_mask)];
                             
                             for (;;) {
+                                ++complexity;
+                                
                                 while (stack->queue == 0) {
                                     if (stack == stack0) goto skip;
                                     --stack;
@@ -1743,6 +1768,8 @@ namespace dairin0d.Octree.Rendering {
                             stack->queue = root_queue;
                             
                             for (;;) {
+                                ++complexity;
+                                
                                 while (stack->queue == 0) {
                                     if (stack == stack0) goto skip;
                                     --stack;
@@ -1781,6 +1808,10 @@ namespace dairin0d.Octree.Rendering {
                         tile_x->color = *(colors + stack->offset + octant);
                         
                         skip:;
+                        
+                        if (complexity > ComplexityMax) ComplexityMax = complexity;
+                        ComplexitySum += complexity;
+                        ++ComplexityCnt;
                     }
                 }
             }
