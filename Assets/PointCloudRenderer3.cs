@@ -133,6 +133,41 @@ Example of allocating/freeing unmanaged memory:
 IntPtr hglobal = Marshal.AllocHGlobal(100);
 Marshal.FreeHGlobal(hglobal);
 
+
+
+// Separable maps for X and Y?
+
+queue = queues[forward_key | mask];
+
+for (; queue != 0; queue >>= 4) {
+    int octant = (int)(queue & 7);
+    
+    var delta = level_deltas + octant;
+    
+    int _x0 = x0 + delta->x0, _px0 = _x0 >> subpixel_shift;
+    int _y0 = y0 + delta->y0, _py0 = _y0 >> subpixel_shift;
+    
+    var pixel = tile + (_px0 + (_py0 << tile_shift));
+    
+    var _node = node[octant];
+    color = colors + ((_node & 0xFFFFFF) << 3);
+    int mask = (_node >> 24) & 0xFF;
+    
+    map_x = mapX[_x0 & subpixel_mask];
+    map_y = mapY[_y0 & subpixel_mask];
+    
+    mask_map = mask & map_x.v0 & map_y.v0;
+    if (mask_map != 0) {
+        if (pixel->depth > z) {
+            pixel->depth = z;
+            pixel->color = color[queues[forward_key | mask_map] & 7];
+        }
+    }
+    
+    ...
+}
+
+
 */
 
 namespace dairin0d.Octree.Rendering {
@@ -1644,14 +1679,16 @@ namespace dairin0d.Octree.Rendering {
                 int subx = 0, suby = 0, subz = 0;
                 
                 var tile_y = tile + (py0 << tile_shift);
-                for (float ry = ry0; ry < ry1; ry += rdy, tile_y += row) {
+                for (var ry = ry0; ry < ry1; ry += rdy, tile_y += row) {
                     stack0->y = (int)ry;
                     
                     var tile_x = tile_y + px0;
-                    for (float rx = rx0; rx < rx1; rx += rdx, ++tile_x) {
+                    for (var rx = rx0; rx < rx1; rx += rdx, ++tile_x) {
                         stack0->x = (int)rx;
                         
                         var depth = tile_x->depth;
+                        
+                        if (stack0->z >= depth) goto skip;
                         
                         // reset stack position and queue
                         var stack = stack0;
@@ -1672,22 +1709,23 @@ namespace dairin0d.Octree.Rendering {
                                 stack->queue >>= 4;
                                 
                                 var delta = (deltas + octant);
+                                
+                                subz = stack->z + (delta->z >> stack->level);
+                                if (subz >= depth) goto skip;
+                                
+                                if (stack->draw) goto draw;
+                                
                                 subx = (stack->x - delta->x) << 1;
                                 suby = (stack->y - delta->y) << 1;
                                 // subx & suby can still end up outside,
                                 // possibly due to discrepancy between
-                                // rasterization and delta
+                                // map rasterization and ray delta
                                 if (((subx|suby) & ray_mask) != 0) continue;
                                 
                                 map_x = subx >> ray_map_shift;
                                 map_y = suby >> ray_map_shift;
                                 map_mask = map[map_x | (map_y << MapShift)];
                                 if (map_mask == 0) continue;
-                                
-                                subz = stack->z + (delta->z >> stack->level);
-                                if (subz >= depth) goto skip;
-                                
-                                if (stack->draw) goto draw;
                                 
                                 int node = *(nodes + stack->offset + octant);
                                 int mask = (node >> 24) & 0xFF;
@@ -1714,12 +1752,13 @@ namespace dairin0d.Octree.Rendering {
                                 stack->queue >>= 4;
                                 
                                 var delta = (deltas + octant);
-                                subx = (stack->x - delta->x) << 1;
-                                suby = (stack->y - delta->y) << 1;
-                                if (((subx|suby) & ray_mask) != 0) continue;
                                 
                                 subz = stack->z + (delta->z >> stack->level);
                                 if (subz >= depth) goto skip;
+                                
+                                subx = (stack->x - delta->x) << 1;
+                                suby = (stack->y - delta->y) << 1;
+                                if (((subx|suby) & ray_mask) != 0) continue;
                                 
                                 if (stack->draw) goto draw;
                                 
