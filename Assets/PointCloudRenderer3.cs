@@ -168,6 +168,32 @@ for (; queue != 0; queue >>= 4) {
 }
 
 
+map_x4 = mapX4[_x0 & subpixel_mask];
+map_y4 = mapY4[_y0 & subpixel_mask];
+map_x = mapX + (_x0 & subpixel_mask) << 3;
+map_y = mapY + (_y0 & subpixel_mask) << 3;
+for (y4 = 0..cell4_h) {
+    for (x4 = 0..cell4_w) {
+        if (pixel4->depth <= z4) continue;
+        mask_map4 = mask4 & (map_x4 >> x4) & (map_y4 >> y4);
+        queue = queues[forward_key | mask_map4];
+        for (; queue != 0; queue >>= 4) {
+            int octant = (int)(queue & 7);
+            var _node = node4[octant];
+            int mask = (_node >> 24) & 0xFF;
+            mask_map = mask & (map_x[octant] >> x4) & (map_y[octant] >> x4);
+            if (mask_map != 0) {
+                pixel->depth = z;
+                color = colors + ((_node & 0xFFFFFF) << 3);
+                pixel->color = color[queues[forward_key | mask_map] & 7];
+                goto drawn;
+            }
+        }
+        drawn:;
+    }
+}
+
+
 */
 
 namespace dairin0d.Octree.Rendering {
