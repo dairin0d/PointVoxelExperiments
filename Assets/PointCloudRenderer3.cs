@@ -371,6 +371,20 @@ namespace dairin0d.Octree.Rendering {
                 GUI.Label(new Rect(x, y, bw, lh), $"RenderSize: {RenderSize}");
                 y -= lh;
                 
+                Splatter.OverrideKey = (int)GUI.HorizontalSlider(new Rect(x, y, bw, lh), Splatter.OverrideKey, -1, 7);
+                y -= lh;
+                GUI.Label(new Rect(x, y, bw, lh), $"OverrideKey: {Splatter.OverrideKey}");
+                y -= lh;
+                
+                Splatter.FlatMode = GUI.Toggle(new Rect(x, y, bw, lh), Splatter.FlatMode, "Flat Mode");
+                y -= lh;
+                
+                Splatter.CountRaycastNodes = GUI.Toggle(new Rect(x, y, bw, lh), Splatter.CountRaycastNodes, $"RC={Splatter.RaycastNodes.Count}");
+                y -= lh;
+                
+                Splatter.UseRaycast = GUI.Toggle(new Rect(x, y, bw, lh), Splatter.UseRaycast, "Use Raycast");
+                y -= lh;
+                
                 Splatter.UseLast = GUI.Toggle(new Rect(x, y, bw, lh), Splatter.UseLast, "Use Last");
                 y -= lh;
                 
@@ -533,6 +547,8 @@ namespace dairin0d.Octree.Rendering {
         }
         
         unsafe void RenderObjects() {
+            if (Splatter.CountRaycastNodes) Splatter.RaycastNodes.Clear();
+            
             var octree = test_octree;
             if (use_model && (model_octree != null)) octree = model_octree;
             
@@ -542,6 +558,9 @@ namespace dairin0d.Octree.Rendering {
             fixed (uint* queues = OctantOrder.Queues)
             fixed (Splatter.Delta* deltas = splatter.deltas)
             fixed (Splatter.StackEntry* stack = splatter.stack)
+            fixed (Splatter.RayDelta* ray_deltas = Splatter.ray_deltas)
+            fixed (Splatter.RayStack* ray_stack = Splatter.ray_stack)
+            fixed (int* map = Splatter.ray_map)
             {
                 foreach (var (sort_z, tfm) in visible_objects) {
                     var obj2world = tfm.localToWorldMatrix * Matrix4x4.Scale(Vector3.one*voxel_scale);
@@ -552,10 +571,13 @@ namespace dairin0d.Octree.Rendering {
                     fixed (Color32* colors = octree.colors)
                     {
                         Splatter.Render(buf, w, h, tile_shift, node, color, nodes, colors,
-                            ref mvp_matrix, subpixel_shift, depth_scale, queues, deltas, stack);
+                            ref mvp_matrix, subpixel_shift, depth_scale, queues, deltas, stack,
+                            ray_deltas, ray_stack, map);
                     }
                 }
             }
+            
+            Splatter.CountRaycastNodes = false;
         }
         
         static RawOctree LoadPointCloud(string path, float voxel_size=-1) {
@@ -895,6 +917,15 @@ namespace dairin0d.Octree.Rendering {
         public static int ComplexitySum = 0;
         public static int ComplexityCnt = 0;
         
+        public static bool UseRaycast = false;
+        
+        public static bool CountRaycastNodes = false;
+        public static HashSet<int> RaycastNodes = new HashSet<int>();
+        
+        public static bool FlatMode = false;
+        
+        public static int OverrideKey = -1;
+        
         unsafe static Delta CalcBoundsAndDeltas(ref Matrix4x4 matrix, int subpixel_shift, float depth_scale, Delta* deltas) {
             // float Xx=matrix.m00, Yx=matrix.m01, Zx=matrix.m02, Tx=matrix.m03;
             // float Xy=matrix.m10, Yy=matrix.m11, Zy=matrix.m12, Ty=matrix.m13;
@@ -982,6 +1013,11 @@ namespace dairin0d.Octree.Rendering {
                             delta->x01 = delta->x0 - delta->x1;
                             delta->y01 = delta->y0 - delta->y1;
                             ++octant;
+                            
+                            if (FlatMode) {
+                                delta->z = 0;
+                                ray_deltas[octant].z = 0;
+                            }
                         }
                     }
                 }
@@ -1002,6 +1038,10 @@ namespace dairin0d.Octree.Rendering {
             }
             
             if (UseMap) RasterizeMap(ref matrix);
+            
+            for (int i = 0; i < ray_stack.Length; ++i) {
+                ray_stack[i].level = i;
+            }
             
             return root;
         }
@@ -1122,9 +1162,10 @@ namespace dairin0d.Octree.Rendering {
         public unsafe static void Render(Buffer.DataItem* buf, int w, int h, int tile_shift,
             int node, Color32 color, int* nodes, Color32* colors,
             ref Matrix4x4 matrix, int subpixel_shift, float depth_scale,
-            uint* queues, Delta* deltas, StackEntry* stack)
+            uint* queues, Delta* deltas, StackEntry* stack,
+            RayDelta* ray_deltas, RayStack* ray_stack, int* map)
         {
-            UseMap = (RenderAlg == 4);
+            UseMap = (RenderAlg == 4) | (RenderAlg == 5);
             
             var root = CalcBoundsAndDeltas(ref matrix, subpixel_shift, depth_scale, deltas);
             
@@ -1172,10 +1213,12 @@ namespace dairin0d.Octree.Rendering {
                     
                     if (RenderAlg == 4) {
                         Raycast(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues,
-                            stack->x0, stack->y0, stack->x1, stack->y1, stack->z, stack->node);
+                            stack->x0, stack->y0, stack->x1, stack->y1, stack->z, stack->node,
+                            ray_deltas, ray_stack, map);
                     } else if (RenderAlg == 3) {
                         Raycast(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues,
-                            stack->x0, stack->y0, stack->x1, stack->y1, stack->z, stack->node);
+                            stack->x0, stack->y0, stack->x1, stack->y1, stack->z, stack->node,
+                            ray_deltas, ray_stack, map);
                     } else if (RenderAlg == 2) {
                         UseMap4 = true;
                         Render1(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack);
@@ -1183,7 +1226,8 @@ namespace dairin0d.Octree.Rendering {
                         UseMap4 = false;
                         Render1(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack);
                     } else {
-                        Render0(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack);
+                        Render0(tile, tw, th, tile_shift, nodes, colors, forward_key, subpixel_shift, queues, deltas, stack,
+                            ray_deltas, ray_stack, map);
                     }
                 }
             }
@@ -1191,10 +1235,16 @@ namespace dairin0d.Octree.Rendering {
         
         unsafe static void Render0(Buffer.DataItem* tile, int w, int h, int tile_shift,
             int* nodes, Color32* colors, int forward_key, int subpixel_shift,
-            uint* queues, Delta* deltas, StackEntry* stack)
+            uint* queues, Delta* deltas, StackEntry* stack,
+            RayDelta* ray_deltas, RayStack* ray_stack, int* map)
         {
             // We need to put nodes on stack in back-to-front order
             int reverse_key = forward_key ^ 0b11100000000;
+            
+            if ((OverrideKey >= 0) & (OverrideKey < 8)) {
+                reverse_key = forward_key & ~0b11100000000;
+                reverse_key |= OverrideKey << 8;
+            }
             
             int tile_size = 1 << tile_shift;
             
@@ -1209,8 +1259,12 @@ namespace dairin0d.Octree.Rendering {
             var node = nodes;
             var color = colors;
             
+            int ray_max_level = CalcMaxLevel(stack->x0, stack->y0, stack->x1, stack->y1, subpixel_shift);
+            
             do {
                 ++NodeCount;
+                
+                if (CountRaycastNodes) RaycastNodes.Add(stack->node);
                 
                 var current = stack;
                 --stack; --stack_top;
@@ -1255,6 +1309,21 @@ namespace dairin0d.Octree.Rendering {
                 } else if ((current->level >= max_level) | ((pw <= StopAt) & (ph <= StopAt))) {
                     // For test
                     ++QuadCount;
+                    
+                    if (UseRaycast) {
+                        Raycast(tile, w, h, tile_shift,
+                        nodes, colors, forward_key, subpixel_shift,
+                        queues,
+                        current->x0,
+                        current->y0,
+                        current->x1,
+                        current->y1,
+                        current->z,
+                        current->node,
+                        ray_deltas, ray_stack, map,
+                        ray_max_level, current->level);
+                        continue;
+                    }
                     
                     var tile_y = tile + (py0 << tile_shift);
                     var tile_y_end = tile + (py1 << tile_shift);
@@ -1381,6 +1450,8 @@ namespace dairin0d.Octree.Rendering {
             
             while (stack_top >= 0) {
                 ++NodeCount;
+                
+                if (CountRaycastNodes) RaycastNodes.Add(stack->node);
                 
                 var current = stack;
                 --stack; --stack_top;
@@ -1657,24 +1728,41 @@ namespace dairin0d.Octree.Rendering {
                 }
             }
         }
-        
-        unsafe static void Raycast(Buffer.DataItem* tile, int w, int h, int tile_shift,
-            int* nodes, Color32* colors, int forward_key, int subpixel_shift,
-            uint* queues, int x0, int y0, int x1, int y1, int z, int node_start)
-        {
-            int px0 = x0 >> subpixel_shift; if (px0 < 0) px0 = 0;
-            int py0 = y0 >> subpixel_shift; if (py0 < 0) py0 = 0;
-            int px1 = x1 >> subpixel_shift; if (px1 > w) px1 = w;
-            int py1 = y1 >> subpixel_shift; if (py1 > h) py1 = h;
-            if ((px0 >= px1) | (py0 >= py1)) return;
-            
+
+        static int CalcMaxLevel(int x0, int y0, int x1, int y1, int subpixel_shift) {
             int max_level = 0;
             {
                 int sz = Mathf.Max(x1 - x0, y1 - y0);
                 int szm = 1 << subpixel_shift;
                 while ((sz >> max_level) > szm) ++max_level;
             }
+            return max_level;
+        }
+
+        unsafe static void Raycast(Buffer.DataItem* tile, int w, int h, int tile_shift,
+            int* nodes, Color32* colors, int forward_key, int subpixel_shift,
+            uint* queues, int x0, int y0, int x1, int y1, int z, int node_start,
+            RayDelta* ray_deltas, RayStack* ray_stack, int* map)
+        {
+            int max_level = CalcMaxLevel(x0, y0, x1, y1, subpixel_shift);
             max_level = Mathf.Max(Mathf.Min(max_level, ((int)MaxLevel)-1), 0);
+            
+            Raycast(tile, w, h, tile_shift,
+            nodes, colors, forward_key, subpixel_shift,
+            queues, x0, y0, x1, y1, z, node_start,
+            ray_deltas, ray_stack, map, max_level);
+        }
+
+        unsafe static void Raycast(Buffer.DataItem* tile, int w, int h, int tile_shift,
+            int* nodes, Color32* colors, int forward_key, int subpixel_shift,
+            uint* queues, int x0, int y0, int x1, int y1, int z, int node_start,
+            RayDelta* ray_deltas, RayStack* ray_stack, int* map, int max_level, int start_level = 0)
+        {
+            int px0 = x0 >> subpixel_shift; if (px0 < 0) px0 = 0;
+            int py0 = y0 >> subpixel_shift; if (py0 < 0) py0 = 0;
+            int px1 = x1 >> subpixel_shift; if (px1 > w) px1 = w;
+            int py1 = y1 >> subpixel_shift; if (py1 > h) py1 = h;
+            if ((px0 >= px1) | (py0 >= py1)) return;
             
             int pixel_size = 1 << subpixel_shift;
             int half_pixel = pixel_size >> 1;
@@ -1704,14 +1792,24 @@ namespace dairin0d.Octree.Rendering {
             float rdx = pixel_size * x_scale;
             float rdy = pixel_size * y_scale;
             
-            for (int i = 0; i < ray_stack.Length; ++i) {
-                ray_stack[i].level = i;
-                ray_stack[i].draw = (i >= max_level);
+            
+            if (FlatMode) {
+                for (int i = 0; i < Splatter.ray_deltas.Length; i++) {
+                    Splatter.ray_deltas[i].z = 0;
+                }
             }
             
-            fixed (RayDelta* deltas = ray_deltas)
-            fixed (RayStack* stack0 = ray_stack)
-            fixed (int* map = ray_map)
+            
+            // for (int i = 0; i < ray_stack.Length; ++i) {
+            //     ray_stack[i].level = i;
+            //     ray_stack[i].draw = (i >= max_level);
+            // }
+            
+            var deltas = ray_deltas;
+            var stack0 = ray_stack + start_level;
+            // fixed (RayDelta* deltas = ray_deltas)
+            // fixed (RayStack* stack0 = ray_stack)
+            // fixed (int* map = ray_map)
             {
                 stack0->node = node_start;
                 stack0->offset = (stack0->node & 0xFFFFFF) << 3;
@@ -1764,7 +1862,8 @@ namespace dairin0d.Octree.Rendering {
                                 subz = stack->z + (delta->z >> stack->level);
                                 if (subz >= depth) goto skip;
                                 
-                                if (stack->draw) goto draw;
+                                //if (stack->draw) goto draw;
+                                if (stack->level >= max_level) goto draw;
                                 
                                 subx = (stack->x - delta->x) << 1;
                                 suby = (stack->y - delta->y) << 1;
@@ -1779,6 +1878,7 @@ namespace dairin0d.Octree.Rendering {
                                 if (map_mask == 0) continue;
                                 
                                 int node = *(nodes + stack->offset + octant);
+                                if (CountRaycastNodes) RaycastNodes.Add(node);
                                 int mask = (node >> 24) & 0xFF;
                                 if (mask == 0) goto draw;
                                 
@@ -1813,9 +1913,11 @@ namespace dairin0d.Octree.Rendering {
                                 suby = (stack->y - delta->y) << 1;
                                 if (((subx|suby) & ray_mask) != 0) continue;
                                 
-                                if (stack->draw) goto draw;
+                                //if (stack->draw) goto draw;
+                                if (stack->level >= max_level) goto draw;
                                 
                                 int node = *(nodes + stack->offset + octant);
+                                if (CountRaycastNodes) RaycastNodes.Add(node);
                                 int mask = (node >> 24) & 0xFF;
                                 if (mask == 0) goto draw;
                                 
