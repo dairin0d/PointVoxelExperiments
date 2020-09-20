@@ -34,7 +34,7 @@ namespace dairin0d.Octree.Experiment1 {
 		[FieldOffset(4)] public Color32 c;
 	}
 
-	public class PointCloudRenderer : MonoBehaviour {
+	public class PointStripRenderer : MonoBehaviour {
 		public Transform PointCloudsParent;
 
 		public int RenderSize = 128;

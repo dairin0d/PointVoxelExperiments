@@ -197,7 +197,7 @@ for (y4 = 0..cell4_h) {
 */
 
 namespace dairin0d.Octree.Rendering {
-    public class PointCloudRenderer3 : MonoBehaviour {
+    public class OctreeRenderer : MonoBehaviour {
         public int vSyncCount = 0;
         public int targetFrameRate = 30;
         

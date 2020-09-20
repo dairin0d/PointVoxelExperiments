@@ -26,7 +26,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using UnityEngine;
 
-public class PointCloudTest : MonoBehaviour {
+public class PointCloudLoader : MonoBehaviour {
 	public string path;
 	public float scale = 1;
 	public bool autoscale = true;
