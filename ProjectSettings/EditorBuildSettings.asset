@@ -6,6 +6,6 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
-    path: Assets/PointRenderTest.unity
+    path: Assets/Experiments/SoftwareRenderTest.unity
     guid: fa0722e31e4110d40b064999acd98b6d
   m_configObjects: {}
