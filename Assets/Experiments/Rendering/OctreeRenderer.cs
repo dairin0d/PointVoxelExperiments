@@ -20,11 +20,13 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.IO;
 using UnityEngine;
+
+using dairin0d.Data.Points;
+using dairin0d.Data.Voxels;
 
 /*
 Main variants:
@@ -196,7 +198,7 @@ for (y4 = 0..cell4_h) {
 
 */
 
-namespace dairin0d.Octree.Rendering {
+namespace dairin0d.Rendering.Octree {
     public class OctreeRenderer : MonoBehaviour {
         public int vSyncCount = 0;
         public int targetFrameRate = 30;

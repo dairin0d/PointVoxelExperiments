@@ -20,14 +20,19 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-using System.Collections;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.IO;
 using UnityEngine;
 
-namespace dairin0d.Octree.Experiment1 {
-	[StructLayout(LayoutKind.Explicit)]
+using ColorQuantization;
+
+using dairin0d.Data.Colors;
+using dairin0d.Data.Points;
+using dairin0d.Data.Voxels;
+
+namespace dairin0d.Rendering.PointStrip {
+    [StructLayout(LayoutKind.Explicit)]
 	struct BufData {
 		[FieldOffset(0)] public int zi;
 		[FieldOffset(0)] public float zf;

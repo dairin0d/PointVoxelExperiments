@@ -113,7 +113,7 @@ NodeMinIfF: 54
 
 */
 
-namespace dairin0d.Octree.Tests {
+namespace dairin0d.Tests {
     public class PerformanceTests : MonoBehaviour {
         System.Diagnostics.Stopwatch stopwatch;
         

@@ -20,179 +20,182 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using UnityEngine;
 
-public class PointCloudLoader : MonoBehaviour {
-	public string path;
-	public float scale = 1;
-	public bool autoscale = true;
-	public float viz_amount = 1;
+using dairin0d.Data.Points;
 
-	System.Diagnostics.Stopwatch stopwatch;
+namespace dairin0d.MeshLoading {
+	public class PointCloudLoader : MonoBehaviour {
+		public string path;
+		public float scale = 1;
+		public bool autoscale = true;
+		public float viz_amount = 1;
 
-	Vector3 initial_scale;
+		System.Diagnostics.Stopwatch stopwatch;
 
-	void Start() {
-		stopwatch = new System.Diagnostics.Stopwatch();
+		Vector3 initial_scale;
 
-		initial_scale = transform.localScale;
+		void Start() {
+			stopwatch = new System.Diagnostics.Stopwatch();
 
-		BuildMesh();
-	}
+			initial_scale = transform.localScale;
 
-	void BuildMesh() {
-		if (!File.Exists(path)) { Debug.LogError("File does not exist"); return; }
-
-		string ext = Path.GetExtension(path).ToLowerInvariant();
-		string cached_path = (ext == ".cached" ? path : path+".cached");
-		if (File.Exists(cached_path)) {
-			if (File.GetLastWriteTime(cached_path) >= File.GetLastWriteTime(path)) {
-				BuildMesh_Cached(cached_path);
-				return;
-			}
+			BuildMesh();
 		}
 
-		BuildMesh_Uncached(cached_path);
-	}
+		void BuildMesh() {
+			if (!File.Exists(path)) { Debug.LogError("File does not exist"); return; }
 
-	void BuildMesh_Cached(string cached_path) {
-		stopwatch.Start();
-		var stream = new FileStream(cached_path, FileMode.Open, FileAccess.Read);
-		var br = new BinaryReader(stream);
-		int vCount = br.ReadInt32();
-		var vBytes = br.ReadBytes(vCount*3*4);
-		int cCount = br.ReadInt32();
-		var cBytes = br.ReadBytes(cCount*4*1);
-		int nCount = br.ReadInt32();
-		var nBytes = br.ReadBytes(nCount*3*4);
-		stream.Close();
-		stream.Dispose();
-		var vertices = BytesToStructArray<Vector3>(vBytes);
-		var colors = BytesToStructArray<Color32>(cBytes);
-		var normals = BytesToStructArray<Vector3>(nBytes);
-		stopwatch.Stop();
-		Debug.Log("Read "+cached_path+" : "+vertices.Length+" ("+stopwatch.ElapsedMilliseconds+" ms)");
-		if (colors.Length == 0) colors = null;
-		if (normals.Length == 0) normals = null;
-		BuildMesh(vertices, colors, normals);
-	}
-	
-	// "Union of arrays" trick doesn't work in recent Unity versions
-	// (http://markheath.net/post/wavebuffer-casting-byte-arrays-to-float)
-	// Unity throws TypeLoadException when trying to invoke a method that uses such a struct
-	T[] BytesToStructArray<T>(byte[] bytes) where T : struct {
-		int count = bytes.Length / Marshal.SizeOf(default(T));
-		var array = new T[count];
-		GCHandle handle = GCHandle.Alloc(array, GCHandleType.Pinned);
-		try {
-			var buffer = handle.AddrOfPinnedObject();
-			Marshal.Copy(bytes, 0, buffer, bytes.Length);
-		} finally {
-			handle.Free();
-		}
-		return array;
-	}
-
-	void BuildMesh_Uncached(string cached_path) {
-		var vertices = new List<Vector3>();
-		var colors = new List<Color32>();
-		var normals = new List<Vector3>();
-		int full_count = 0;
-
-		stopwatch.Start();
-		using (var pcr = new PointCloudFile.Reader(path)) {
-			Vector3 pos; Color32 color; Vector3 normal;
-			while (pcr.Read(out pos, out color, out normal)) {
-				full_count++;
-				if (float.IsNaN(pos.x)|float.IsNaN(pos.y)|float.IsNaN(pos.y)) {
-					Debug.Log(vertices.Count+" is NaN");
-					continue;
+			string ext = Path.GetExtension(path).ToLowerInvariant();
+			string cached_path = (ext == ".cached" ? path : path+".cached");
+			if (File.Exists(cached_path)) {
+				if (File.GetLastWriteTime(cached_path) >= File.GetLastWriteTime(path)) {
+					BuildMesh_Cached(cached_path);
+					return;
 				}
-				if (float.IsInfinity(pos.x)|float.IsInfinity(pos.y)|float.IsInfinity(pos.y)) {
-					Debug.Log(vertices.Count+" is inf");
-					continue;
+			}
+
+			BuildMesh_Uncached(cached_path);
+		}
+
+		void BuildMesh_Cached(string cached_path) {
+			stopwatch.Start();
+			var stream = new FileStream(cached_path, FileMode.Open, FileAccess.Read);
+			var br = new BinaryReader(stream);
+			int vCount = br.ReadInt32();
+			var vBytes = br.ReadBytes(vCount*3*4);
+			int cCount = br.ReadInt32();
+			var cBytes = br.ReadBytes(cCount*4*1);
+			int nCount = br.ReadInt32();
+			var nBytes = br.ReadBytes(nCount*3*4);
+			stream.Close();
+			stream.Dispose();
+			var vertices = BytesToStructArray<Vector3>(vBytes);
+			var colors = BytesToStructArray<Color32>(cBytes);
+			var normals = BytesToStructArray<Vector3>(nBytes);
+			stopwatch.Stop();
+			Debug.Log("Read "+cached_path+" : "+vertices.Length+" ("+stopwatch.ElapsedMilliseconds+" ms)");
+			if (colors.Length == 0) colors = null;
+			if (normals.Length == 0) normals = null;
+			BuildMesh(vertices, colors, normals);
+		}
+		
+		// "Union of arrays" trick doesn't work in recent Unity versions
+		// (http://markheath.net/post/wavebuffer-casting-byte-arrays-to-float)
+		// Unity throws TypeLoadException when trying to invoke a method that uses such a struct
+		T[] BytesToStructArray<T>(byte[] bytes) where T : struct {
+			int count = bytes.Length / Marshal.SizeOf(default(T));
+			var array = new T[count];
+			GCHandle handle = GCHandle.Alloc(array, GCHandleType.Pinned);
+			try {
+				var buffer = handle.AddrOfPinnedObject();
+				Marshal.Copy(bytes, 0, buffer, bytes.Length);
+			} finally {
+				handle.Free();
+			}
+			return array;
+		}
+
+		void BuildMesh_Uncached(string cached_path) {
+			var vertices = new List<Vector3>();
+			var colors = new List<Color32>();
+			var normals = new List<Vector3>();
+			int full_count = 0;
+
+			stopwatch.Start();
+			using (var pcr = new PointCloudFile.Reader(path)) {
+				Vector3 pos; Color32 color; Vector3 normal;
+				while (pcr.Read(out pos, out color, out normal)) {
+					full_count++;
+					if (float.IsNaN(pos.x)|float.IsNaN(pos.y)|float.IsNaN(pos.y)) {
+						Debug.Log(vertices.Count+" is NaN");
+						continue;
+					}
+					if (float.IsInfinity(pos.x)|float.IsInfinity(pos.y)|float.IsInfinity(pos.y)) {
+						Debug.Log(vertices.Count+" is inf");
+						continue;
+					}
+					if (Random.value > viz_amount) return;
+					vertices.Add(pos*scale); colors.Add(color); normals.Add(normal);
 				}
-				if (Random.value > viz_amount) return;
-				vertices.Add(pos*scale); colors.Add(color); normals.Add(normal);
 			}
-		}
-		stopwatch.Stop();
-		Debug.Log("Read "+path+" : "+full_count+" -> "+vertices.Count+" ("+stopwatch.ElapsedMilliseconds+" ms)");
+			stopwatch.Stop();
+			Debug.Log("Read "+path+" : "+full_count+" -> "+vertices.Count+" ("+stopwatch.ElapsedMilliseconds+" ms)");
 
-		WriteCachedMesh(cached_path, vertices, colors, normals);
+			WriteCachedMesh(cached_path, vertices, colors, normals);
 
-		BuildMesh(vertices, colors, normals);
-	}
+			BuildMesh(vertices, colors, normals);
+		}
 
-	void WriteCachedMesh(string cached_path, IList<Vector3> vertices, IList<Color32> colors, IList<Vector3> normals) {
-		var stream = new FileStream(cached_path, FileMode.Create, FileAccess.Write);
-		var bw = new BinaryWriter(stream);
-		bw.Write(vertices.Count);
-		for (int i = 0; i < vertices.Count; i++) {
-			var item = vertices[i];
-			bw.Write(item.x); bw.Write(item.y); bw.Write(item.z);
-		}
-		if (colors != null) {
-			bw.Write(colors.Count);
-			for (int i = 0; i < colors.Count; i++) {
-				var item = colors[i];
-				bw.Write(item.r); bw.Write(item.g); bw.Write(item.b); bw.Write(item.a);
-			}
-		} else {
-			bw.Write((int)0);
-		}
-		if (normals != null) {
-			bw.Write(normals.Count);
-			for (int i = 0; i < normals.Count; i++) {
-				var item = normals[i];
+		void WriteCachedMesh(string cached_path, IList<Vector3> vertices, IList<Color32> colors, IList<Vector3> normals) {
+			var stream = new FileStream(cached_path, FileMode.Create, FileAccess.Write);
+			var bw = new BinaryWriter(stream);
+			bw.Write(vertices.Count);
+			for (int i = 0; i < vertices.Count; i++) {
+				var item = vertices[i];
 				bw.Write(item.x); bw.Write(item.y); bw.Write(item.z);
 			}
-		} else {
-			bw.Write((int)0);
+			if (colors != null) {
+				bw.Write(colors.Count);
+				for (int i = 0; i < colors.Count; i++) {
+					var item = colors[i];
+					bw.Write(item.r); bw.Write(item.g); bw.Write(item.b); bw.Write(item.a);
+				}
+			} else {
+				bw.Write((int)0);
+			}
+			if (normals != null) {
+				bw.Write(normals.Count);
+				for (int i = 0; i < normals.Count; i++) {
+					var item = normals[i];
+					bw.Write(item.x); bw.Write(item.y); bw.Write(item.z);
+				}
+			} else {
+				bw.Write((int)0);
+			}
+			bw.Flush();
+			stream.Flush();
+			stream.Close();
+			stream.Dispose();
+			Debug.Log("Cached version saved: "+cached_path);
 		}
-		bw.Flush();
-		stream.Flush();
-		stream.Close();
-		stream.Dispose();
-		Debug.Log("Cached version saved: "+cached_path);
-	}
 
-	void BuildMesh(IList<Vector3> vertices, IList<Color32> colors, IList<Vector3> normals) {
-		var vA = vertices as Vector3[]; var vL = vertices as List<Vector3>;
-		var cA = colors as Color32[]; var cL = colors as List<Color32>;
-		var nA = normals as Vector3[]; var nL = normals as List<Vector3>;
+		void BuildMesh(IList<Vector3> vertices, IList<Color32> colors, IList<Vector3> normals) {
+			var vA = vertices as Vector3[]; var vL = vertices as List<Vector3>;
+			var cA = colors as Color32[]; var cL = colors as List<Color32>;
+			var nA = normals as Vector3[]; var nL = normals as List<Vector3>;
 
-		var indices = new int[vertices.Count];
-		for (int i = 0; i < indices.Length; i++) {
-			indices[i] = i;
-		}
+			var indices = new int[vertices.Count];
+			for (int i = 0; i < indices.Length; i++) {
+				indices[i] = i;
+			}
 
-		var mesh = new Mesh();
-		mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-		if (vA != null) { mesh.vertices = vA; } else if (vL != null) { mesh.SetVertices(vL); }
-		if (cA != null) { mesh.colors32 = cA; } else if (cL != null) { mesh.SetColors(cL); }
-		if (nA != null) { mesh.normals = nA; } else if (nL != null) { mesh.SetNormals(nL); }
-		mesh.SetIndices(indices, MeshTopology.Points, 0, true);
+			var mesh = new Mesh();
+			mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+			if (vA != null) { mesh.vertices = vA; } else if (vL != null) { mesh.SetVertices(vL); }
+			if (cA != null) { mesh.colors32 = cA; } else if (cL != null) { mesh.SetColors(cL); }
+			if (nA != null) { mesh.normals = nA; } else if (nL != null) { mesh.SetNormals(nL); }
+			mesh.SetIndices(indices, MeshTopology.Points, 0, true);
 
-		var mesh_filter = GetComponent<MeshFilter>();
-		mesh_filter.sharedMesh = mesh;
+			var mesh_filter = GetComponent<MeshFilter>();
+			mesh_filter.sharedMesh = mesh;
 
-		var mesh_renderer = GetComponent<MeshRenderer>();
-		mesh_renderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
-		mesh_renderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
-		mesh_renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-		mesh_renderer.receiveShadows = false;
-		mesh_renderer.motionVectorGenerationMode = MotionVectorGenerationMode.ForceNoMotion;
+			var mesh_renderer = GetComponent<MeshRenderer>();
+			mesh_renderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+			mesh_renderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+			mesh_renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+			mesh_renderer.receiveShadows = false;
+			mesh_renderer.motionVectorGenerationMode = MotionVectorGenerationMode.ForceNoMotion;
 
-		if (autoscale) {
-			var bounds = mesh.bounds;
-			Vector3 norm = initial_scale / Mathf.Max(Mathf.Max(bounds.size.x, bounds.size.y), bounds.size.z);
-			transform.position -= Vector3.Scale(bounds.center, norm);
-			transform.localScale = norm;
+			if (autoscale) {
+				var bounds = mesh.bounds;
+				Vector3 norm = initial_scale / Mathf.Max(Mathf.Max(bounds.size.x, bounds.size.y), bounds.size.z);
+				transform.position -= Vector3.Scale(bounds.center, norm);
+				transform.localScale = norm;
+			}
 		}
 	}
 }
