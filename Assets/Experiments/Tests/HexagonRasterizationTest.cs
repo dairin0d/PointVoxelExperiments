@@ -22,6 +22,7 @@
 
 using System.Collections.Generic;
 using UnityEngine;
+using dairin0d.Rendering;
 
 namespace dairin0d.Tests {
 	public class HexagonRasterizationTest : MonoBehaviour {
@@ -93,8 +94,10 @@ namespace dairin0d.Tests {
 				GUI.color = quad_color;
 				GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), tex);
 				GUI.color = Color.black;
-				string txt = string.Format("dt={0:0.000}", dt);
-				GUI.Label(new Rect(0, Screen.height-20, Screen.width, 20), txt);
+				var rect = new Rect(0, Screen.height, Screen.width, 20);
+				rect.y -= rect.height;
+				GUI.Label(rect, $"dt={dt:0.000}");
+				rect.y -= rect.height;
 				GUI.color = Color.white;
 			}
 		}
@@ -218,122 +221,174 @@ namespace dairin0d.Tests {
 			}
 		}
 
+		OctantMap octantMap = new OctantMap();
+		
+		public int map_shift = 5;
+		
 		void Render(Matrix4x4 matrix, BufData[] buf, int buf_shift, int w, int h) {
-			if ((w <= 4) | (h <= 4)) return;
+			// Shape / size distortion is less noticeable than presence of gaps
 			
-			int subpixel_shift = 8;
-			int pixel_size = (1 << subpixel_shift), half_pixel = pixel_size >> 1;
+			var X = new Vector2 {x = matrix.m00, y = matrix.m10};
+			var Y = new Vector2 {x = matrix.m01, y = matrix.m11};
+			var Z = new Vector2 {x = matrix.m02, y = matrix.m12};
+			var T = new Vector2 {x = matrix.m03, y = matrix.m13};
 			
-			var extents = new Vector2 {
-				x = (matrix.m00 < 0f ? -matrix.m00 : matrix.m00) +
-				(matrix.m01 < 0f ? -matrix.m01 : matrix.m01) +
-				(matrix.m02 < 0f ? -matrix.m02 : matrix.m02),
-				y = (matrix.m10 < 0f ? -matrix.m10 : matrix.m10) +
-				(matrix.m11 < 0f ? -matrix.m11 : matrix.m11) +
-				(matrix.m12 < 0f ? -matrix.m12 : matrix.m12),
-			};
+			// Make hexagon slightly larger to make sure there will be
+			// no gaps between this node and the neighboring nodes
+			float sizeX = Mathf.Max(Mathf.Abs(X.x), Mathf.Abs(X.y));
+			float sizeY = Mathf.Max(Mathf.Abs(Y.x), Mathf.Abs(Y.y));
+			float sizeZ = Mathf.Max(Mathf.Abs(Z.x), Mathf.Abs(Z.y));
+			float sizeMax = Mathf.Max(Mathf.Max(sizeX, sizeY), sizeZ);
+			var scaleV = (sizeMax + 2f) / sizeMax;
+			X *= scaleV;
+			Y *= scaleV;
+			Z *= scaleV;
 			
-			int margin = 2;
-			float scale_x = pixel_size * (w * 0.5f - margin) / extents.x;
-			float scale_y = pixel_size * (h * 0.5f - margin) / extents.y;
+			int Xx = (int)X.x, Yx = (int)Y.x, Zx = (int)Z.x, Tx = (int)T.x;
+			int Xy = (int)X.y, Yy = (int)Y.y, Zy = (int)Z.y, Ty = (int)T.y;
 			
-			// int Xx=(int)(matrix.m00*pixel_size), Yx=(int)(matrix.m01*pixel_size), Zx=(int)(matrix.m02*pixel_size), Tx=(int)(matrix.m03*pixel_size);
-			// int Xy=(int)(matrix.m10*pixel_size), Yy=(int)(matrix.m11*pixel_size), Zy=(int)(matrix.m12*pixel_size), Ty=(int)(matrix.m13*pixel_size);
-			int Xx=(int)(matrix.m00*scale_x), Yx=(int)(matrix.m01*scale_x), Zx=(int)(matrix.m02*scale_x), Tx=(int)((w * 0.5f)*pixel_size);
-			int Xy=(int)(matrix.m10*scale_y), Yy=(int)(matrix.m11*scale_y), Zy=(int)(matrix.m12*scale_y), Ty=(int)((h * 0.5f)*pixel_size);
-
-			int extents_x = (Xx < 0 ? -Xx : Xx) + (Yx < 0 ? -Yx : Yx) + (Zx < 0 ? -Zx : Zx);
-			int extents_y = (Xy < 0 ? -Xy : Xy) + (Yy < 0 ? -Yy : Yy) + (Zy < 0 ? -Zy : Zy);
-			extents_x >>= 1;
-			extents_y >>= 1;
-
-			var nX = (new Vector2(-Xy, Xx));
-			if (nX.x < 0) nX.x = -nX.x; if (nX.y < 0) nX.y = -nX.y;
-			var nY = (new Vector2(-Yy, Yx));
-			if (nY.x < 0) nY.x = -nY.x; if (nY.y < 0) nY.y = -nY.y;
-			var nZ = (new Vector2(-Zy, Zx));
-			if (nZ.x < 0) nZ.x = -nZ.x; if (nZ.y < 0) nZ.y = -nZ.y;
-
-			Tx -= half_pixel;
-			Ty -= half_pixel;
-
-			int dotXM = Mathf.Max(Mathf.Abs(Xx*(Yy+Zy) - Xy*(Yx+Zx)), Mathf.Abs(Xx*(Yy-Zy) - Xy*(Yx-Zx)));
-			int dotYM = Mathf.Max(Mathf.Abs(Yx*(Xy+Zy) - Yy*(Xx+Zx)), Mathf.Abs(Yx*(Xy-Zy) - Yy*(Xx-Zx)));
-			int dotZM = Mathf.Max(Mathf.Abs(Zx*(Xy+Yy) - Zy*(Xx+Yx)), Mathf.Abs(Zx*(Xy-Yy) - Zy*(Xx-Yx)));
-
-			dotXM >>= 1;
-			dotYM >>= 1;
-			dotZM >>= 1;
-
-			dotXM += (int)((nX.x + nX.y) * half_pixel + 0.5f);
-			dotYM += (int)((nY.x + nY.y) * half_pixel + 0.5f);
-			dotZM += (int)((nZ.x + nZ.y) * half_pixel + 0.5f);
-
-			int dotXdx = -Xy << subpixel_shift;
-			int dotXdy = Xx << subpixel_shift;
-			int dotYdx = -Yy << subpixel_shift;
-			int dotYdy = Yx << subpixel_shift;
-			int dotZdx = -Zy << subpixel_shift;
-			int dotZdy = Zx << subpixel_shift;
+			// Snap to 2-grid to align N+1 map with integer coordiantes in N map
+			Xx = SnapTo2(Xx); Xy = SnapTo2(Xy);
+			Yx = SnapTo2(Yx); Yy = SnapTo2(Yy);
+			Zx = SnapTo2(Zx); Zy = SnapTo2(Zy);
+			Tx = SnapTo2(Tx); Ty = SnapTo2(Ty);
 			
-			for (int i = 0; i < buf.Length; ++i) {
-				buf[i].zi = 0;
+			int extentX = (Xx < 0 ? -Xx : Xx) + (Yx < 0 ? -Yx : Yx) + (Zx < 0 ? -Zx : Zx);
+			int extentY = (Xy < 0 ? -Xy : Xy) + (Yy < 0 ? -Yy : Yy) + (Zy < 0 ? -Zy : Zy);
+			
+			int map_size = 1 << map_shift;
+			// We need 2-pixel margin to make sure that an intersection at level N is inside the map at level N+1
+			float map_scale_factor = map_size / (map_size - 4f);
+			
+			// Use 1-pixel margin on all sides to make sure the hexagon is always inside
+			int hexSize = (int)(((extentX > extentY ? extentX : extentY) + 1) * 2 * map_scale_factor);
+			
+			// Power-of-two bounding square
+			int pot_shift = 2, pot_size = 1 << pot_shift;
+			for (; pot_size < hexSize; pot_shift++, pot_size <<= 1);
+			
+			// Testing:
+			
+			void draw(int x, int y, Color32 color) {
+				if ((x < 0) | (x >= w) | (y < 0) | (y >= h)) return;
+				if (color.a == 255) {
+					buf[x | (y << buf_shift)].c = color;
+				} else {
+					buf[x | (y << buf_shift)].c = Color32.Lerp(buf[x | (y << buf_shift)].c, color, color.a / 255f);
+				}
 			}
 			
-			int octant = 0;
-			for (int subZ = -1; subZ <= 1; subZ += 2) {
-				for (int subY = -1; subY <= 1; subY += 2) {
-					for (int subX = -1; subX <= 1; subX += 2) {
-						int dx = (Xx*subX + Yx*subY + Zx*subZ) >> 1;
-						int dy = (Xy*subX + Yy*subY + Zy*subZ) >> 1;
-						int cx = Tx + dx;
-						int cy = Ty + dy;
-						
-						int xmin = Mathf.Max(((cx-extents_x) >> subpixel_shift) - 2, margin);
-						int ymin = Mathf.Max(((cy-extents_y) >> subpixel_shift) - 2, margin);
-						int xmax = Mathf.Min(((cx+extents_x) >> subpixel_shift) + 2, w-margin);
-						int ymax = Mathf.Min(((cy+extents_y) >> subpixel_shift) + 2, h-margin);
-						
-						int offset_x = (xmin << subpixel_shift) - cx;
-						int offset_y = (ymin << subpixel_shift) - cy;
-						
-						int dotXr = Xx*offset_y - Xy*offset_x;
-						int dotYr = Yx*offset_y - Yy*offset_x;
-						int dotZr = Zx*offset_y - Zy*offset_x;
-						
-						int mask = 1 << octant;
-						
-						for (int iy = ymin; iy < ymax; ++iy) {
-							int ixy0 = (iy << buf_shift) + xmin;
-							int ixy1 = (iy << buf_shift) + xmax;
-							int dotX = dotXr;
-							int dotY = dotYr;
-							int dotZ = dotZr;
-							for (int ixy = ixy0; ixy < ixy1; ++ixy) {
-								//if ((dotX<=dotXM)&(-dotX<=dotXM) & (dotY<=dotYM)&(-dotY<=dotYM) & (dotZ<=dotZM)&(-dotZ<=dotZM)) { // a bit slower
-								if (((dotX^(dotX>>31)) <= dotXM) & ((dotY^(dotY>>31)) <= dotYM) & ((dotZ^(dotZ>>31)) <= dotZM)) { // a bit faster
-									buf[ixy].zi |= mask;
-								}
-								dotX += dotXdx;
-								dotY += dotYdx;
-								dotZ += dotZdx;
-							}
-							dotXr += dotXdy;
-							dotYr += dotYdy;
-							dotZr += dotZdy;
-						}
-						
-						++octant;
+			int pot_half = pot_size >> 1;
+			
+			int minX = Tx - pot_half;
+			int minY = Ty - pot_half;
+			int maxX = minX + pot_size - 1;
+			int maxY = minY + pot_size - 1;
+			
+			octantMap.Resize(map_shift);
+			octantMap.Bake(Xx, Xy, Yx, Yy, Zx, Zy, Tx - minX, Ty - minY, pot_shift);
+			
+			Color32 bounds_color = Color.white;
+			DrawLine(minX, minY, minX, maxY, bounds_color, draw);
+			DrawLine(maxX, minY, maxX, maxY, bounds_color, draw);
+			DrawLine(minX, minY, maxX, minY, bounds_color, draw);
+			DrawLine(minX, maxY, maxX, maxY, bounds_color, draw);
+			
+			// int x0 = Mathf.Max(minX, 0);
+			// int y0 = Mathf.Max(minY, 0);
+			// int x1 = Mathf.Min(maxX, w-1);
+			// int y1 = Mathf.Min(maxY, h-1);
+			int x0 = Mathf.Max(Tx - extentX, 0);
+			int y0 = Mathf.Max(Ty - extentY, 0);
+			int x1 = Mathf.Min(Tx + extentX, w-1);
+			int y1 = Mathf.Min(Ty + extentY, h-1);
+			var mapData = octantMap.Data;
+			int mapShift = octantMap.SizeShift;
+			int mapSize = octantMap.Size;
+			for (int y = y0, mapY = ((y - minY) << mapShift) ; y <= y1; y++, mapY += mapSize) {
+				int my = mapY >> pot_shift;
+				for (int x = x0, mapX = ((x - minX) << mapShift); x <= x1; x++, mapX += mapSize) {
+					int mx = mapX >> pot_shift;
+					int mask = mapData[mx | (my << mapShift)];
+					if (mask != 0) {
+						int i = x | (y << buf_shift);
+						buf[i].c.r = (byte)((mask & 0b1111) << 4);
+						buf[i].c.g = (byte)(mask & 0b11110000);
 					}
 				}
 			}
 			
-			for (int i = 0; i < buf.Length; ++i) {
-				int mask = buf[i].zi;
-				buf[i].c.r = (byte)((mask & 0b1111) << 4);
-				buf[i].c.g = (byte)(mask & 0b11110000);
-				buf[i].c.b = 0;
-				buf[i].c.a = 255;
+			minX = Tx - extentX;
+			minY = Ty - extentY;
+			maxX = Tx + extentX;
+			maxY = Ty + extentY;
+			
+			bounds_color = Color.magenta;
+			bounds_color.a = 64;
+			DrawLine(minX, minY, minX, maxY, bounds_color, draw);
+			DrawLine(maxX, minY, maxX, maxY, bounds_color, draw);
+			DrawLine(minX, minY, maxX, minY, bounds_color, draw);
+			DrawLine(minX, maxY, maxX, maxY, bounds_color, draw);
+			
+			draw(Tx, Ty, Color.gray);
+			draw(Tx+Xx, Ty+Xy, Color.red);
+			draw(Tx+Yx, Ty+Yy, Color.green);
+			draw(Tx+Zx, Ty+Zy, Color.blue);
+			
+			draw(Tx-Xx-Yx-Zx, Ty-Xy-Yy-Zy, Color.yellow);
+			draw(Tx-Xx-Yx+Zx, Ty-Xy-Yy+Zy, Color.yellow);
+			draw(Tx-Xx+Yx-Zx, Ty-Xy+Yy-Zy, Color.yellow);
+			draw(Tx-Xx+Yx+Zx, Ty-Xy+Yy+Zy, Color.yellow);
+			draw(Tx+Xx-Yx-Zx, Ty+Xy-Yy-Zy, Color.yellow);
+			draw(Tx+Xx-Yx+Zx, Ty+Xy-Yy+Zy, Color.yellow);
+			draw(Tx+Xx+Yx-Zx, Ty+Xy+Yy-Zy, Color.yellow);
+			draw(Tx+Xx+Yx+Zx, Ty+Xy+Yy+Zy, Color.yellow);
+		}
+		
+		int SnapTo2(int value) {
+			if ((value & 1) == 0) return value;
+			return value < 0 ? value-1 : value+1;
+		}
+		
+		// http://ericw.ca/notes/bresenhams-line-algorithm-in-csharp.html
+		static void DrawLine<T>(int x0, int y0, int x1, int y1, T value, System.Action<int, int, T> callback) {
+			bool steep = Mathf.Abs(y1 - y0) > Mathf.Abs(x1 - x0);
+			
+			if (steep) {
+				int t;
+				t = x0; // swap x0 and y0
+				x0 = y0;
+				y0 = t;
+				t = x1; // swap x1 and y1
+				x1 = y1;
+				y1 = t;
+			}
+			
+			if (x0 > x1) {
+				int t;
+				t = x0; // swap x0 and x1
+				x0 = x1;
+				x1 = t;
+				t = y0; // swap y0 and y1
+				y0 = y1;
+				y1 = t;
+			}
+			
+			int dx = x1 - x0;
+			int dy = Mathf.Abs(y1 - y0);
+			int error = dx / 2;
+			int ystep = (y0 < y1) ? 1 : -1;
+			int y = y0;
+			
+			for (int x = x0; x <= x1; x++) {
+				callback((steep ? y : x), (steep ? x : y), value);
+				
+				error = error - dy;
+				
+				if (error < 0) {
+					y += ystep;
+					error += dx;
+				}
 			}
 		}
 	}
