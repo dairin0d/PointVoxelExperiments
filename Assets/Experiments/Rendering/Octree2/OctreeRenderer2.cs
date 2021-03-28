@@ -688,13 +688,20 @@ namespace dairin0d.Rendering.Octree2 {
             public int x0, y0, x1, y1;
         }
         Delta[] deltas = new Delta[8 * 32];
-
+        
         struct StackEntry {
             public int x, y, offset;
             public uint queue;
+            public NodeState state;
         }
         StackEntry[] stack = new StackEntry[8 * 32];
-
+        
+        struct NodeState {
+            public int x0, y0, x1, y1;
+            public int mx0, my0, mx1, my1;
+            public int depth, node, pixelShift, pixelSize;
+        }
+        
         public int MapShift = 5;
         OctantMap octantMap = new OctantMap();
         
@@ -703,31 +710,17 @@ namespace dairin0d.Rendering.Octree2 {
         public bool UseRaycast = false;
         
         public void UpdateWidgets(List<Widget<string>> infoWidgets, List<Widget<float>> sliderWidgets, List<Widget<bool>> toggleWidgets) {
-            // if ((RenderAlg == 3) | (RenderAlg == 4)) {
-            //     infoWidgets.Add(new Widget<string>($"ComplexityMax={ComplexityMax}"));
-
-            //     float avg = ComplexitySum;
-            //     if (ComplexityCnt > 0) avg /= ComplexityCnt;
-            //     infoWidgets.Add(new Widget<string>($"ComplexityAvg={avg}"));
-            // } else {
-            //     infoWidgets.Add(new Widget<string>($"PixelCount={PixelCount}"));
-            //     infoWidgets.Add(new Widget<string>($"QuadCount={QuadCount}"));
-            //     infoWidgets.Add(new Widget<string>($"CulledCount={CulledCount}"));
-            //     infoWidgets.Add(new Widget<string>($"OccludedCount={OccludedCount}"));
-            //     infoWidgets.Add(new Widget<string>($"NodeCount={NodeCount}"));
-            // }
+            // infoWidgets.Add(new Widget<string>($"PixelCount={PixelCount}"));
+            // infoWidgets.Add(new Widget<string>($"QuadCount={QuadCount}"));
+            // infoWidgets.Add(new Widget<string>($"CulledCount={CulledCount}"));
+            // infoWidgets.Add(new Widget<string>($"OccludedCount={OccludedCount}"));
+            // infoWidgets.Add(new Widget<string>($"NodeCount={NodeCount}"));
 
             sliderWidgets.Add(new Widget<float>("Level", () => MaxLevel, (value) => { MaxLevel = (int)value; }, 0, 16));
             // sliderWidgets.Add(new Widget<float>("Stop At", () => StopAt, (value) => { StopAt = (int)value; }, 0, 8));
-            // sliderWidgets.Add(new Widget<float>("Renderer", () => RenderAlg, (value) => { RenderAlg = (int)value; }, 0, 8));
             sliderWidgets.Add(new Widget<float>("MapShift", () => MapShift, (value) => { MapShift = (int)value; }, OctantMap.MinShift, OctantMap.MaxShift));
-            // sliderWidgets.Add(new Widget<float>("OverrideKey", () => OverrideKey, (value) => { OverrideKey = (int)value; }, -1, 7));
 
-            // toggleWidgets.Add(new Widget<bool>("Flat Mode", () => FlatMode, (value) => { FlatMode = value; }));
-            // toggleWidgets.Add(new Widget<bool>($"RC={RaycastNodes.Count}",
-            //     () => CountRaycastNodes, (value) => { CountRaycastNodes = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Raycast", () => UseRaycast, (value) => { UseRaycast = value; }));
-            // toggleWidgets.Add(new Widget<bool>("Use Last", () => UseLast, (value) => { UseLast = value; }));
         }
         
         public unsafe void RenderObjects(Buffer buffer, IEnumerable<(Matrix4x4, RawOctree)> instances) {
@@ -736,10 +729,6 @@ namespace dairin0d.Rendering.Octree2 {
             // CulledCount = 0;
             // OccludedCount = 0;
             // NodeCount = 0;
-
-            // ComplexityMax = 0;
-            // ComplexitySum = 0;
-            // ComplexityCnt = 0;
 
             octantMap.Resize(MapShift);
 
@@ -782,6 +771,7 @@ namespace dairin0d.Rendering.Octree2 {
             int pixelHalf = pixelSize >> 1;
             
             int mapShift = octantMap.SizeShift;
+            int mapSize = octantMap.Size;
             int toMapShift = PrecisionShift - mapShift;
             
             // pixel space: 1 = pixel
@@ -796,105 +786,122 @@ namespace dairin0d.Rendering.Octree2 {
             // min is inclusive, max is exclusive
             int minPX = startX + ((boundsX0+pixelHalf) >> potShiftDelta);
             int minPY = startY + ((boundsY0+pixelHalf) >> potShiftDelta);
-            int maxPX = startX + ((boundsX1+pixelHalf) >> potShiftDelta) + 1;
-            int maxPY = startY + ((boundsY1+pixelHalf) >> potShiftDelta) + 1;
+            int maxPX = startX + ((boundsX1+pixelHalf) >> potShiftDelta);
+            int maxPY = startY + ((boundsY1+pixelHalf) >> potShiftDelta);
             
             maxDepth -= 1; // draw at 1 level above max depth
             maxDepth = Mathf.Clamp(maxDepth, 0, MaxLevel);
-            var drawing = stack + maxDepth;
             
             int xShift = toMapShift;
             int yShift = toMapShift - mapShift;
             int yMask = ~((1 << mapShift) - 1);
             
-            int emptyDepth = int.MaxValue;
+            int defaultZ = int.MaxValue;
             
             if (!UseRaycast)
             {
-                int pixelSize1 = pixelSize-1;
+                var curr = stack + 1;
+                curr->state.depth = 1;
+                curr->state.node = rootNode;
+                curr->state.pixelShift = potShiftDelta;
+                curr->state.pixelSize = 1 << curr->state.pixelShift;
+                curr->state.x0 = (minPX < 0 ? 0 : minPX);
+                curr->state.y0 = (minPY < 0 ? 0 : minPY);
+                curr->state.x1 = (maxPX >= w ? w-1 : maxPX);
+                curr->state.y1 = (maxPY >= h ? h-1 : maxPY);
+                curr->state.mx0 = ((curr->state.x0 - startX) << potShiftDelta) + pixelHalf;
+                curr->state.my0 = ((curr->state.y0 - startY) << potShiftDelta) + pixelHalf;
+                curr->state.mx1 = ((curr->state.x1 - startX) << potShiftDelta) + pixelHalf;
+                curr->state.my1 = ((curr->state.y1 - startY) << potShiftDelta) + pixelHalf;
                 
-                int node = rootNode;
-                
-                int x0 = (minPX < 0 ? 0 : minPX);
-                int y0 = (minPY < 0 ? 0 : minPY);
-                int x1 = (maxPX > w ? w : maxPX);
-                int y1 = (maxPY > h ? h : maxPY);
-                
-                int mx0 = ((x0 - startX) << potShiftDelta) + pixelHalf;
-                int my0 = ((y0 - startY) << potShiftDelta) + pixelHalf;
-                int mx1 = mx0 + ((x1-x0) << potShiftDelta);
-                int my1 = my0 + ((y1-y0) << potShiftDelta);
-                
-                // Occlusion test
-                for (int y = y0, my = my0; y < y1; y++, my += pixelSize) {
-                    var bufY = buf + (y << bufShift);
-                    var mapY = map + ((my >> toMapShift) << mapShift);
-                    for (int x = x0, mx = mx0; x < x1; x++, mx += pixelSize) {
-                        int mask = mapY[mx >> toMapShift] & node;
-                        if ((mask != 0) & (bufY[x].depth == emptyDepth)) {
-                            my0 = my;
-                            goto traverse;
-                        }
-                    }
-                }
-                // Skip
-                return; // for now
-                traverse:;
-                
-                var queue = forwardQueues[node & 0xFF]; // for drawing; when adding to stack, use reverseQueues
-                
-                int offset = (node >> (8-3)) & (0xFFFFFF << 3);
-                
-                int pixelShift = potShiftDelta;
-                
-                for (; queue != 0; queue >>= 4) {
-                    int octant = unchecked((int)(queue & 7));
-                    node = nodes[offset|octant];
+                while (curr > stack) {
+                    var state = curr->state;
+                    --curr;
                     
-                    int dx0 = deltas[octant].x0 - mx0 + pixelSize1;
-                    int dy0 = deltas[octant].y0 - my0 + pixelSize1;
-                    int dx1 = mx1 - deltas[octant].x1 + pixelSize1;
-                    int dy1 = my1 - deltas[octant].y1 + pixelSize1;
-                    // dx0 = (dx0 & ~(dx0 >> 31)) >> pixelShift;
-                    // dy0 = (dy0 & ~(dy0 >> 31)) >> pixelShift;
-                    // dx1 = (dx1 & ~(dx1 >> 31)) >> pixelShift;
-                    // dy1 = (dy1 & ~(dy1 >> 31)) >> pixelShift;
-                    dx0 = (dx0 < 0 ? 0 : dx0) >> pixelShift;
-                    dy0 = (dy0 < 0 ? 0 : dy0) >> pixelShift;
-                    dx1 = (dx1 < 0 ? 0 : dx1) >> pixelShift;
-                    dy1 = (dy1 < 0 ? 0 : dy1) >> pixelShift;
-                    
-                    int _x0 = x0 + dx0;
-                    int _y0 = y0 + dy0;
-                    int _x1 = x1 - dx1;
-                    int _y1 = y1 - dy1;
-                    
-                    int _pixelShift = pixelShift + 1;
-                    int _pixelSize = pixelSize << 1;
-                    
-                    int _mx0 = (mx0 + (dx0 << pixelShift) - deltas[octant].x) << 1;
-                    int _my0 = (my0 + (dy0 << pixelShift) - deltas[octant].y) << 1;
-                    int _mx1 = _mx0 + ((_x1-_x0) << _pixelShift);
-                    int _my1 = _my0 + ((_y1-_y0) << _pixelShift);
-                    
-                    int _offset = (node >> (8-3)) & (0xFFFFFF << 3);
-                    
-                    for (int y = _y0, my = _my0; y <= _y1; y++, my += _pixelSize) {
-                        var bufY = buf + (y << bufShift);
-                        var mapY = map + ((my >> toMapShift) << mapShift);
-                        for (int x = _x0, mx = _mx0; x <= _x1; x++, mx += _pixelSize) {
-                            int mask = mapY[mx >> toMapShift] & node;
-                            if ((mask != 0) & (bufY[x].depth == emptyDepth)) {
-                                int _octant = unchecked((int)(forwardQueues[mask] & 7));
-                                bufY[x].color = colors[_offset|_octant];
-                                bufY[x].depth = 1;
+                    if (state.depth >= maxDepth) {
+                        var colorData = colors + ((state.node >> (8-3)) & (0xFFFFFF << 3));
+                        for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
+                            var bufY = buf + (y << bufShift);
+                            var mapY = map + ((my >> toMapShift) << mapShift);
+                            for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
+                                int mask = mapY[mx >> toMapShift] & state.node;
+                                if ((mask != 0) & (bufY[x].depth == defaultZ)) {
+                                    int octant = unchecked((int)(forwardQueues[mask] & 7));
+                                    bufY[x].color = colorData[octant];
+                                    bufY[x].depth = 1;
+                                }
                             }
                         }
+                        continue;
+                    }
+                    
+                    int lastMY = state.my0;
+                    
+                    // Occlusion test
+                    for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
+                        var bufY = buf + (y << bufShift);
+                        var mapY = map + ((my >> toMapShift) << mapShift);
+                        for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
+                            int mask = mapY[mx >> toMapShift] & state.node;
+                            if ((mask != 0) & (bufY[x].depth == defaultZ)) {
+                                lastMY = my;
+                                goto traverse;
+                            }
+                        }
+                    }
+                    continue;
+                    traverse:;
+                    
+                    var queue = reverseQueues[state.node & 0xFF];
+                    var nodeData = nodes + ((state.node >> (8-3)) & (0xFFFFFF << 3));
+                    
+                    int borderX0 = state.mx0 - (state.pixelSize-1);
+                    int borderY0 = state.my0 - (state.pixelSize-1);
+                    int borderX1 = state.mx1 + (state.pixelSize-1);
+                    int borderY1 = state.my1 + (state.pixelSize-1);
+                    
+                    lastMY = lastMY - borderY0;
+                    
+                    for (; queue != 0; queue >>= 4) {
+                        int octant = unchecked((int)(queue & 7));
+                        
+                        int dx0 = deltas[octant].x0 - borderX0;
+                        int dy0 = deltas[octant].y0 - borderY0;
+                        int dx1 = borderX1 - deltas[octant].x1;
+                        int dy1 = borderY1 - deltas[octant].y1;
+                        dy0 = (dy0 > lastMY ? dy0 : lastMY);
+                        dx0 = (dx0 < 0 ? 0 : dx0) >> state.pixelShift;
+                        dy0 = (dy0 < 0 ? 0 : dy0) >> state.pixelShift;
+                        dx1 = (dx1 < 0 ? 0 : dx1) >> state.pixelShift;
+                        dy1 = (dy1 < 0 ? 0 : dy1) >> state.pixelShift;
+                        
+                        int x0 = state.x0 + dx0;
+                        int y0 = state.y0 + dy0;
+                        int x1 = state.x1 - dx1;
+                        int y1 = state.y1 - dy1;
+                        
+                        if ((x0 > x1) | (y0 > y1)) continue;
+                        
+                        ++curr;
+                        curr->state.depth = state.depth+1;
+                        curr->state.node = nodeData[octant];
+                        curr->state.pixelShift = state.pixelShift + 1;
+                        curr->state.pixelSize = state.pixelSize << 1;
+                        curr->state.x0 = x0;
+                        curr->state.y0 = y0;
+                        curr->state.x1 = x1;
+                        curr->state.y1 = y1;
+                        curr->state.mx0 = (state.mx0 + (dx0 << state.pixelShift) - deltas[octant].x) << 1;
+                        curr->state.my0 = (state.my0 + (dy0 << state.pixelShift) - deltas[octant].y) << 1;
+                        curr->state.mx1 = curr->state.mx0 + ((x1 - x0) << curr->state.pixelShift);
+                        curr->state.my1 = curr->state.my0 + ((y1 - y0) << curr->state.pixelShift);
                     }
                 }
             }
             else
             {
+                var drawing = stack + maxDepth;
+                
                 int x0 = (minPX < 0 ? 0 : minPX);
                 int y0 = (minPY < 0 ? 0 : minPY);
                 int x1 = (maxPX > w ? w : maxPX);
