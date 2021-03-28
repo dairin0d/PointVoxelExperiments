@@ -684,7 +684,8 @@ namespace dairin0d.Rendering.Octree2 {
         const int PrecisionShift = 30;
         
         struct Delta {
-            public int x, y;
+            public int x, y, z, pad0;
+            public int x0, y0, x1, y1;
         }
         Delta[] deltas = new Delta[8 * 32];
 
@@ -698,7 +699,9 @@ namespace dairin0d.Rendering.Octree2 {
         OctantMap octantMap = new OctantMap();
         
         public int MaxLevel = 0;
-
+        
+        public bool UseRaycast = false;
+        
         public void UpdateWidgets(List<Widget<string>> infoWidgets, List<Widget<float>> sliderWidgets, List<Widget<bool>> toggleWidgets) {
             // if ((RenderAlg == 3) | (RenderAlg == 4)) {
             //     infoWidgets.Add(new Widget<string>($"ComplexityMax={ComplexityMax}"));
@@ -723,7 +726,7 @@ namespace dairin0d.Rendering.Octree2 {
             // toggleWidgets.Add(new Widget<bool>("Flat Mode", () => FlatMode, (value) => { FlatMode = value; }));
             // toggleWidgets.Add(new Widget<bool>($"RC={RaycastNodes.Count}",
             //     () => CountRaycastNodes, (value) => { CountRaycastNodes = value; }));
-            // toggleWidgets.Add(new Widget<bool>("Use Raycast", () => UseRaycast, (value) => { UseRaycast = value; }));
+            toggleWidgets.Add(new Widget<bool>("Use Raycast", () => UseRaycast, (value) => { UseRaycast = value; }));
             // toggleWidgets.Add(new Widget<bool>("Use Last", () => UseLast, (value) => { UseLast = value; }));
         }
         
@@ -768,7 +771,8 @@ namespace dairin0d.Rendering.Octree2 {
             
             int forwardKey = OctantOrder.Key(in matrix);
             int reverseKey = forwardKey ^ 0b11100000000;
-            uint* directionQueues = queues + forwardKey;
+            uint* forwardQueues = queues + forwardKey;
+            uint* reverseQueues = queues + reverseKey;
             
             int potSize = 1 << potShift;
             int potHalf = potSize >> 1;
@@ -789,18 +793,6 @@ namespace dairin0d.Rendering.Octree2 {
             int endX = centerX + potHalf;
             int endY = centerY + potHalf;
             
-            int x0 = (startX < 0 ? 0 : startX);
-            int y0 = (startY < 0 ? 0 : startY);
-            int x1 = (endX > w ? w : endX);
-            int y1 = (endY > h ? h : endY);
-            for (int y = y0; y < y1; y++) {
-                int iy = y << bufShift;
-                for (int x = x0; x < x1; x++) {
-                    buf[x|iy].color.r = 128;
-                    buf[x|iy].color.a = 128;
-                }
-            }
-            
             // min is inclusive, max is exclusive
             int minPX = startX + ((boundsX0+pixelHalf) >> potShiftDelta);
             int minPY = startY + ((boundsY0+pixelHalf) >> potShiftDelta);
@@ -815,60 +807,144 @@ namespace dairin0d.Rendering.Octree2 {
             int yShift = toMapShift - mapShift;
             int yMask = ~((1 << mapShift) - 1);
             
-            x0 = (minPX < 0 ? 0 : minPX);
-            y0 = (minPY < 0 ? 0 : minPY);
-            x1 = (maxPX > w ? w : maxPX);
-            y1 = (maxPY > h ? h : maxPY);
-            for (int y = y0, my = ((y - startY) << potShiftDelta) + pixelHalf; y < y1; y++, my += pixelSize) {
-                int iy = y << bufShift;
-                int imapY = (my >> toMapShift) << mapShift;
-                for (int x = x0, mx = ((x - startX) << potShiftDelta) + pixelHalf; x < x1; x++, mx += pixelSize) {
-                    int mapX = (mx >> toMapShift);
+            int emptyDepth = int.MaxValue;
+            
+            if (!UseRaycast)
+            {
+                int pixelSize1 = pixelSize-1;
+                
+                int node = rootNode;
+                
+                int x0 = (minPX < 0 ? 0 : minPX);
+                int y0 = (minPY < 0 ? 0 : minPY);
+                int x1 = (maxPX > w ? w : maxPX);
+                int y1 = (maxPY > h ? h : maxPY);
+                
+                int mx0 = ((x0 - startX) << potShiftDelta) + pixelHalf;
+                int my0 = ((y0 - startY) << potShiftDelta) + pixelHalf;
+                int mx1 = mx0 + ((x1-x0) << potShiftDelta);
+                int my1 = my0 + ((y1-y0) << potShiftDelta);
+                
+                // Occlusion test
+                for (int y = y0, my = my0; y < y1; y++, my += pixelSize) {
+                    var bufY = buf + (y << bufShift);
+                    var mapY = map + ((my >> toMapShift) << mapShift);
+                    for (int x = x0, mx = mx0; x < x1; x++, mx += pixelSize) {
+                        int mask = mapY[mx >> toMapShift] & node;
+                        if ((mask != 0) & (bufY[x].depth == emptyDepth)) {
+                            my0 = my;
+                            goto traverse;
+                        }
+                    }
+                }
+                // Skip
+                return; // for now
+                traverse:;
+                
+                var queue = forwardQueues[node & 0xFF]; // for drawing; when adding to stack, use reverseQueues
+                
+                int offset = (node >> (8-3)) & (0xFFFFFF << 3);
+                
+                int pixelShift = potShiftDelta;
+                
+                for (; queue != 0; queue >>= 4) {
+                    int octant = unchecked((int)(queue & 7));
+                    node = nodes[offset|octant];
                     
-                    // int mask = map[mapX | imapY] & rootNode;
-                    // if (mask != 0) {
-                    //     buf[x|iy].color = rootColor;
-                    // }
+                    int dx0 = deltas[octant].x0 - mx0 + pixelSize1;
+                    int dy0 = deltas[octant].y0 - my0 + pixelSize1;
+                    int dx1 = mx1 - deltas[octant].x1 + pixelSize1;
+                    int dy1 = my1 - deltas[octant].y1 + pixelSize1;
+                    // dx0 = (dx0 & ~(dx0 >> 31)) >> pixelShift;
+                    // dy0 = (dy0 & ~(dy0 >> 31)) >> pixelShift;
+                    // dx1 = (dx1 & ~(dx1 >> 31)) >> pixelShift;
+                    // dy1 = (dy1 & ~(dy1 >> 31)) >> pixelShift;
+                    dx0 = (dx0 < 0 ? 0 : dx0) >> pixelShift;
+                    dy0 = (dy0 < 0 ? 0 : dy0) >> pixelShift;
+                    dx1 = (dx1 < 0 ? 0 : dx1) >> pixelShift;
+                    dy1 = (dy1 < 0 ? 0 : dy1) >> pixelShift;
                     
-                    int mask = map[mapX | imapY] & rootNode;
-                    if (mask == 0) goto skip;
+                    int _x0 = x0 + dx0;
+                    int _y0 = y0 + dy0;
+                    int _x1 = x1 - dx1;
+                    int _y1 = y1 - dy1;
                     
-                    stack->x = mx;
-                    stack->y = my;
-                    stack->queue = directionQueues[mask];
-                    stack->offset = (rootNode >> (8-3)) & (0xFFFFFF << 3);
+                    int _pixelShift = pixelShift + 1;
+                    int _pixelSize = pixelSize << 1;
                     
-                    var curr = stack;
-                    var next = curr + 1;
+                    int _mx0 = (mx0 + (dx0 << pixelShift) - deltas[octant].x) << 1;
+                    int _my0 = (my0 + (dy0 << pixelShift) - deltas[octant].y) << 1;
+                    int _mx1 = _mx0 + ((_x1-_x0) << _pixelShift);
+                    int _my1 = _my0 + ((_y1-_y0) << _pixelShift);
                     
-                    while (curr != drawing) {
-                        while (curr->queue == 0) {
-                            if (curr == stack) goto skip;
-                            next = curr--;
+                    int _offset = (node >> (8-3)) & (0xFFFFFF << 3);
+                    
+                    for (int y = _y0, my = _my0; y <= _y1; y++, my += _pixelSize) {
+                        var bufY = buf + (y << bufShift);
+                        var mapY = map + ((my >> toMapShift) << mapShift);
+                        for (int x = _x0, mx = _mx0; x <= _x1; x++, mx += _pixelSize) {
+                            int mask = mapY[mx >> toMapShift] & node;
+                            if ((mask != 0) & (bufY[x].depth == emptyDepth)) {
+                                int _octant = unchecked((int)(forwardQueues[mask] & 7));
+                                bufY[x].color = colors[_offset|_octant];
+                                bufY[x].depth = 1;
+                            }
+                        }
+                    }
+                }
+            }
+            else
+            {
+                int x0 = (minPX < 0 ? 0 : minPX);
+                int y0 = (minPY < 0 ? 0 : minPY);
+                int x1 = (maxPX > w ? w : maxPX);
+                int y1 = (maxPY > h ? h : maxPY);
+                for (int y = y0, my = ((y - startY) << potShiftDelta) + pixelHalf; y < y1; y++, my += pixelSize) {
+                    int iy = y << bufShift;
+                    int imapY = (my >> toMapShift) << mapShift;
+                    for (int x = x0, mx = ((x - startX) << potShiftDelta) + pixelHalf; x < x1; x++, mx += pixelSize) {
+                        int mapX = (mx >> toMapShift);
+                        
+                        int mask = map[mapX | imapY] & rootNode;
+                        if (mask == 0) goto skip;
+                        
+                        stack->x = mx;
+                        stack->y = my;
+                        stack->queue = forwardQueues[mask];
+                        stack->offset = (rootNode >> (8-3)) & (0xFFFFFF << 3);
+                        
+                        var curr = stack;
+                        var next = curr + 1;
+                        
+                        while (curr != drawing) {
+                            while (curr->queue == 0) {
+                                if (curr == stack) goto skip;
+                                next = curr--;
+                            }
+                            
+                            int octant = unchecked((int)(curr->queue & 7));
+                            curr->queue >>= 4;
+                            
+                            next->x = (curr->x - deltas[octant].x) << 1;
+                            next->y = (curr->y - deltas[octant].y) << 1;
+                            int node = nodes[curr->offset|octant];
+                            
+                            mask = map[((next->y >> yShift) & yMask) | (next->x >> xShift)] & node;
+                            if (mask == 0) continue;
+                            
+                            next->queue = forwardQueues[mask];
+                            next->offset = (node >> (8-3)) & (0xFFFFFF << 3);
+                            
+                            curr = next++;
                         }
                         
-                        int octant = unchecked((int)(curr->queue & 7));
-                        curr->queue >>= 4;
+                        {
+                            int octant = unchecked((int)(curr->queue & 7));
+                            buf[x|iy].color = colors[curr->offset|octant];
+                        }
                         
-                        next->x = (curr->x - deltas[octant].x) << 1;
-                        next->y = (curr->y - deltas[octant].y) << 1;
-                        int node = nodes[curr->offset|octant];
-                        
-                        mask = map[((next->y >> yShift) & yMask) | (next->x >> xShift)] & node;
-                        if (mask == 0) continue;
-                        
-                        next->queue = directionQueues[mask];
-                        next->offset = (node >> (8-3)) & (0xFFFFFF << 3);
-                        
-                        curr = next++;
+                        skip:;
                     }
-                    
-                    {
-                        int octant = unchecked((int)(curr->queue & 7));
-                        buf[x|iy].color = colors[curr->offset|octant];
-                    }
-                    
-                    skip:;
                 }
             }
         }
@@ -891,6 +967,7 @@ namespace dairin0d.Rendering.Octree2 {
             float extentYf = (X.y < 0 ? -X.y : X.y) + (Y.y < 0 ? -Y.y : Y.y) + (Z.y < 0 ? -Z.y : Z.y);
             // We need 2-pixel margin to make sure that an intersection at level N is inside the map at level N+1
             float mapScaleFactor = octantMap.Size / (octantMap.Size - 4f);
+            // Also, add 2 extra pixels (without that, there may be index-out-of-bounds errors in octantMap.Bake())
             int pixelSize = (int)((Mathf.Max(extentXf, extentYf) + 2) * mapScaleFactor);
             
             // Power-of-two bounding square
@@ -949,6 +1026,10 @@ namespace dairin0d.Rendering.Octree2 {
                     for (int subX = -1; subX <= 1; subX += 2) {
                         deltas[octant].x = offsetX + ((Xx * subX + Yx * subY + Zx * subZ) >> 1);
                         deltas[octant].y = offsetY + ((Xy * subX + Yy * subY + Zy * subZ) >> 1);
+                        deltas[octant].x0 = deltas[octant].x + (minX >> 1);
+                        deltas[octant].y0 = deltas[octant].y + (minY >> 1);
+                        deltas[octant].x1 = deltas[octant].x + (maxX >> 1);
+                        deltas[octant].y1 = deltas[octant].y + (maxY >> 1);
                         ++octant;
                     }
                 }
