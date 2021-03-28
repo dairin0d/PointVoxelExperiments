@@ -706,6 +706,7 @@ namespace dairin0d.Rendering.Octree2 {
         OctantMap octantMap = new OctantMap();
         
         public int MaxLevel = 0;
+        public int RaycastAt = -1;
         
         public bool UseRaycast = false;
         
@@ -717,7 +718,7 @@ namespace dairin0d.Rendering.Octree2 {
             // infoWidgets.Add(new Widget<string>($"NodeCount={NodeCount}"));
 
             sliderWidgets.Add(new Widget<float>("Level", () => MaxLevel, (value) => { MaxLevel = (int)value; }, 0, 16));
-            // sliderWidgets.Add(new Widget<float>("Stop At", () => StopAt, (value) => { StopAt = (int)value; }, 0, 8));
+            sliderWidgets.Add(new Widget<float>("RaycastAt", () => RaycastAt, (value) => { RaycastAt = (int)value; }, -1, 16));
             sliderWidgets.Add(new Widget<float>("MapShift", () => MapShift, (value) => { MapShift = (int)value; }, OctantMap.MinShift, OctantMap.MaxShift));
 
             toggleWidgets.Add(new Widget<bool>("Use Raycast", () => UseRaycast, (value) => { UseRaycast = value; }));
@@ -792,6 +793,9 @@ namespace dairin0d.Rendering.Octree2 {
             maxDepth -= 1; // draw at 1 level above max depth
             maxDepth = Mathf.Clamp(maxDepth, 0, MaxLevel);
             
+            int raycastDepth = (RaycastAt < 0 ? maxDepth + 32 : Mathf.Clamp(maxDepth - RaycastAt, 1, maxDepth));
+            int raycastOffset = Mathf.Max(maxDepth - raycastDepth, 0);
+            
             int xShift = toMapShift;
             int yShift = toMapShift - mapShift;
             int yMask = ~((1 << mapShift) - 1);
@@ -817,6 +821,59 @@ namespace dairin0d.Rendering.Octree2 {
                 while (curr > stack) {
                     var state = curr->state;
                     --curr;
+                    
+                    if (state.depth >= raycastDepth) {
+                        var stackR = curr + 1;
+                        var drawing = stackR + raycastOffset;
+                        
+                        for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
+                            var bufY = buf + (y << bufShift);
+                            var mapY = map + ((my >> toMapShift) << mapShift);
+                            for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
+                                int mask = mapY[mx >> toMapShift] & state.node;
+                                if ((mask == 0) | (bufY[x].depth != defaultZ)) goto skip;
+                                
+                                var currR = stackR;
+                                currR->x = mx;
+                                currR->y = my;
+                                currR->queue = forwardQueues[mask];
+                                currR->offset = (state.node >> (8-3)) & (0xFFFFFF << 3);
+                                
+                                var nextR = currR + 1;
+                                
+                                while (currR != drawing) {
+                                    while (currR->queue == 0) {
+                                        if (currR == stackR) goto skip;
+                                        nextR = currR--;
+                                    }
+                                    
+                                    int octant = unchecked((int)(currR->queue & 7));
+                                    currR->queue >>= 4;
+                                    
+                                    nextR->x = (currR->x - deltas[octant].x) << 1;
+                                    nextR->y = (currR->y - deltas[octant].y) << 1;
+                                    int node = nodes[currR->offset|octant];
+                                    
+                                    mask = map[((nextR->y >> yShift) & yMask) | (nextR->x >> xShift)] & node;
+                                    if (mask == 0) continue;
+                                    
+                                    nextR->queue = forwardQueues[mask];
+                                    nextR->offset = (node >> (8-3)) & (0xFFFFFF << 3);
+                                    
+                                    currR = nextR++;
+                                }
+                                
+                                {
+                                    int octant = unchecked((int)(currR->queue & 7));
+                                    bufY[x].color = colors[currR->offset|octant];
+                                    bufY[x].depth = 1;
+                                }
+                                
+                                skip:;
+                            }
+                        }
+                        continue;
+                    }
                     
                     if (state.depth >= maxDepth) {
                         var colorData = colors + ((state.node >> (8-3)) & (0xFFFFFF << 3));

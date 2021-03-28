@@ -3228,7 +3228,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   target: {fileID: 1442392331}
-  distance: 10
+  distance: 25
   xSpeed: 250
   ySpeed: 250
   yMinLimit: -85
@@ -3283,7 +3283,7 @@ Camera:
     width: 1
     height: 1
   near clip plane: 0.5
-  far clip plane: 20
+  far clip plane: 50
   field of view: 60
   orthographic: 1
   orthographic size: 5
