@@ -3207,6 +3207,7 @@ GameObject:
   - component: {fileID: 235244866}
   - component: {fileID: 235244867}
   - component: {fileID: 235244868}
+  - component: {fileID: 235244869}
   m_Layer: 0
   m_Name: Main Camera
   m_TagString: MainCamera
@@ -3342,7 +3343,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 235244859}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: c500f39507a2eb745991238ec5c376b8, type: 3}
   m_Name: 
@@ -3354,6 +3355,7 @@ MonoBehaviour:
   CustomRendering: 1
   voxel_scale: 0.5
   quad_color: {r: 1, g: 1, b: 1, a: 0.5019608}
+  map_shift: 5
 --- !u!114 &235244867
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -3380,7 +3382,7 @@ MonoBehaviour:
     rgba: 4278255360
   test_octree_mask: 153
   use_model: 1
-  model_path: ../Datasets/CSV/PortTown 1253x1025x1256.csv
+  model_path: ../Datasets/CSV/Sapphi.csv
   voxel_size: -1
 --- !u!114 &235244868
 MonoBehaviour:
@@ -3399,6 +3401,32 @@ MonoBehaviour:
   Count: 10000000
   Seed: 0
   Threshold: 0
+--- !u!114 &235244869
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 235244859}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 97ef1795509756b4e8f1e741e3a56d22, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  vSyncCount: 0
+  targetFrameRate: 30
+  RenderSize: 0
+  depth_resolution: 16
+  depth_display_shift: -1
+  PointCloudsParent: {fileID: 1442392331}
+  voxel_scale: 1
+  test_octree_color:
+    serializedVersion: 2
+    rgba: 1426128640
+  test_octree_mask: 153
+  use_model: 1
+  model_path: ../Datasets/CSV/PortTown 1253x1025x1256.csv
+  voxel_size: -1
 --- !u!1 &236087782
 GameObject:
   m_ObjectHideFlags: 0

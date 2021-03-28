@@ -24,8 +24,8 @@ using UnityEngine;
 
 namespace dairin0d.Rendering {
 	public class OctantMap {
-		private const int MinShift = 3;
-		private const int MaxShift = 8;
+		public const int MinShift = 4;
+		public const int MaxShift = 8;
 		
 		// Note: 17 seems to be the practical limit
 		// without overflow (since nodes are centered)

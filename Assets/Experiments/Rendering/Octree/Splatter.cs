@@ -584,7 +584,7 @@ namespace dairin0d.Rendering.Octree {
             if (root.x0 >= (w << subpixel_shift)) return;
             if (root.y0 >= (h << subpixel_shift)) return;
 
-            int forward_key = OctantOrder.Key(ref matrix);
+            int forward_key = OctantOrder.Key(in matrix);
 
             int tile_size = 1 << tile_shift;
             int tile_mask = tile_size - 1;

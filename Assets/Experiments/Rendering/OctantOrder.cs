@@ -35,11 +35,11 @@ namespace dairin0d.Rendering {
         private static uint[] queues = null;
         public static uint[] Queues => queues ?? MakeQueues();
         
-        public static int Key(ref Matrix4x4 matrix) {
-            return ((Order(ref matrix) << 3) | Octant(ref matrix)) << 8;
+        public static int Key(in Matrix4x4 matrix) {
+            return ((Order(in matrix) << 3) | Octant(in matrix)) << 8;
         }
         
-        public static int Octant(ref Matrix4x4 matrix) {
+        public static int Octant(in Matrix4x4 matrix) {
             // Here we check which side of YZ/XZ/XY planes the view vector belongs to
             // This is specific to Unity's coordinate system (X right, Y up, Z forward)
             int bit_x = (matrix.m11 * matrix.m02 <= matrix.m01 * matrix.m12 ? 0 : 1); // Y.y * Z.x <= Y.x * Z.y
@@ -48,7 +48,7 @@ namespace dairin0d.Rendering {
             return bit_x | bit_y | bit_z;
         }
         
-        public static int Order(ref Matrix4x4 matrix) {
+        public static int Order(in Matrix4x4 matrix) {
             return Order(matrix.m20, matrix.m21, matrix.m22);
         }
         public static int Order(float x_z, float y_z, float z_z) {
