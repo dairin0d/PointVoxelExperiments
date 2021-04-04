@@ -21,12 +21,7 @@
 // SOFTWARE.
 
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
-using System.IO;
 using UnityEngine;
-
-using dairin0d.Data.Points;
-using dairin0d.Data.Voxels;
 
 namespace dairin0d.Rendering.Octree2 {
     class Buffer {
@@ -52,9 +47,9 @@ namespace dairin0d.Rendering.Octree2 {
         private System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
         public float FrameTime {get; private set;}
 
-        public void RenderStart(Color32 background) {
+        public void RenderStart(Color32 background, bool clearColor = true) {
             stopwatch.Restart();
-            Clear(background);
+            Clear(background, clearColor);
         }
         
         public void RenderEnd(int depth_shift = -1) {
@@ -164,7 +159,7 @@ namespace dairin0d.Rendering.Octree2 {
             }
         }
 
-        public unsafe void Clear(Color32 background) {
+        public unsafe void Clear(Color32 background, bool clearColor = true) {
             var clear_data = default(DataItem);
             clear_data.depth = int.MaxValue;
             clear_data.color = background;
@@ -191,226 +186,16 @@ namespace dairin0d.Rendering.Octree2 {
                         for (var tile_y = tile; tile_y != tile_end_y; tile_y += tile_size) {
                             var tile_end_x = tile_y + tw;
                             for (var tile_x = tile_y; tile_x != tile_end_x; ++tile_x) {
-                                //*tile_x = clear_data;
-                                tile_x->depth = clear_data.depth;
+                                if (clearColor) {
+                                  *tile_x = clear_data;  
+                                } else {
+                                    tile_x->depth = clear_data.depth;
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-    }
-
-    class RawOctree {
-        public int depth;
-        public int root_node;
-        public Color32 root_color;
-        public int[] nodes;
-        public Color32[] colors;
-
-        public static RawOctree MakeFractal(byte mask, Color32 color) {
-            int root_node = mask;
-            var nodes = new int[8];
-            var colors = new Color32[8];
-            for (int i = 0; i < 8; i++) {
-                nodes[i] = ((mask & (1 << i)) != 0 ? root_node : 0);
-                colors[i] = color;
-            }
-            return new RawOctree() {
-                depth = 32,
-                root_node = root_node,
-                root_color = color,
-                nodes = nodes,
-                colors = colors,
-            };
-        }
-
-        public static RawOctree LoadPointCloud(string path, float voxel_size = -1) {
-            if (string.IsNullOrEmpty(path)) return null;
-
-            string cached_path = path + ".cache4";
-            if (File.Exists(cached_path)) {
-                if (!File.Exists(path)) {
-                    return LoadCached(cached_path);
-                }
-                if (File.GetLastWriteTime(cached_path) >= File.GetLastWriteTime(path)) {
-                    return LoadCached(cached_path);
-                }
-            }
-
-            if (!File.Exists(path)) return null;
-
-            var discretizer = new PointCloudDiscretizer();
-            using (var pcr = new PointCloudFile.Reader(path)) {
-                Vector3 pos; Color32 color; Vector3 normal;
-                while (pcr.Read(out pos, out color, out normal)) {
-                    discretizer.Add(pos, color, normal);
-                }
-            }
-            discretizer.Discretize(voxel_size);
-            //discretizer.FloodFill();
-
-            var octree = new LeafOctree<Color32>();
-            foreach (var voxinfo in discretizer.EnumerateVoxels()) {
-                var node = octree.GetNode(voxinfo.pos, OctreeAccess.AutoInit);
-                node.data = voxinfo.color;
-            }
-
-            var converted = ConvertOctree(octree);
-            WriteCached(converted, cached_path);
-            return converted;
-        }
-
-        private static RawOctree LoadCached(string cached_path) {
-            try {
-                var octree = new RawOctree();
-                var stream = new FileStream(cached_path, FileMode.Open, FileAccess.Read);
-                var br = new BinaryReader(stream);
-                {
-                    int node_count = br.ReadInt32();
-                    octree.depth = br.ReadInt32();
-                    octree.root_node = br.ReadInt32();
-                    octree.root_color = ReadColor32(br);
-                    octree.nodes = ReadArray<int>(br, node_count << 3);
-                    octree.colors = ReadArray<Color32>(br, node_count << 3);
-                }
-                stream.Close();
-                stream.Dispose();
-                SanitizeNodes(octree.nodes);
-                Debug.Log("Cached version loaded: " + cached_path);
-                return octree;
-            } catch (System.Exception exc) {
-                Debug.LogException(exc);
-                return null;
-            }
-        }
-
-        private static unsafe void SanitizeNodes(int[] nodes) {
-            const int mask = 0xFF;
-            fixed (int* _nodes_ptr = nodes) {
-                int* nodes_ptr = _nodes_ptr;
-                int* nodes_end = nodes_ptr + nodes.Length;
-                for (; nodes_ptr != nodes_end; ++nodes_ptr) {
-                    if (((*nodes_ptr) & mask) == 0) *nodes_ptr = 0;
-                }
-            }
-        }
-
-        private static void WriteCached(RawOctree octree, string cached_path) {
-            var stream = new FileStream(cached_path, FileMode.Create, FileAccess.Write);
-            var bw = new BinaryWriter(stream);
-            {
-                bw.Write(octree.nodes.Length >> 3);
-                bw.Write(octree.depth);
-                bw.Write(octree.root_node);
-                WriteColor32(bw, octree.root_color);
-                WriteArray(bw, octree.nodes);
-                WriteArray(bw, octree.colors);
-            }
-            bw.Flush();
-            stream.Flush();
-            stream.Close();
-            stream.Dispose();
-            Debug.Log("Cached version saved: " + cached_path);
-        }
-
-        [StructLayout(LayoutKind.Explicit)]
-        private struct Color32_int {
-            [FieldOffset(0)] public Color32 c;
-            [FieldOffset(0)] public int i;
-        }
-        private static void WriteColor32(BinaryWriter bw, Color32 color) {
-            Color32_int color_int = default;
-            color_int.c = color;
-            bw.Write(color_int.i);
-        }
-        private static Color32 ReadColor32(BinaryReader br) {
-            Color32_int color_int = default;
-            color_int.i = br.ReadInt32();
-            return color_int.c;
-        }
-
-        private unsafe static void WriteArray<T>(BinaryWriter bw, T[] array) where T : struct {
-            var bytes = new byte[array.Length * Marshal.SizeOf<T>()];
-            // System.Buffer.BlockCopy() only works for arrays of primitive types
-            fixed (byte* bytes_ptr = bytes) {
-                GCHandle handle = GCHandle.Alloc(array, GCHandleType.Pinned);
-                var array_ptr = handle.AddrOfPinnedObject().ToPointer();
-                System.Buffer.MemoryCopy(array_ptr, bytes_ptr, bytes.Length, bytes.Length);
-                handle.Free();
-            }
-            bw.Write(bytes);
-        }
-        private unsafe static T[] ReadArray<T>(BinaryReader br, int count) where T : struct {
-            var bytes = br.ReadBytes(count * Marshal.SizeOf<T>());
-            var array = new T[count];
-            // System.Buffer.BlockCopy() only works for arrays of primitive types
-            fixed (byte* bytes_ptr = bytes) {
-                GCHandle handle = GCHandle.Alloc(array, GCHandleType.Pinned);
-                var array_ptr = handle.AddrOfPinnedObject().ToPointer();
-                System.Buffer.MemoryCopy(bytes_ptr, array_ptr, bytes.Length, bytes.Length);
-                handle.Free();
-            }
-            return array;
-        }
-
-        private static RawOctree ConvertOctree(LeafOctree<Color32> octree) {
-            // int octree_levels = octree.Levels;
-            var colors = new Color32[octree.NodeCount << 3];
-            var nodes = new int[octree.NodeCount << 3];
-            int id = 0, depth = 0;
-            var (mask, color) = LinearizeOctree(octree.Root, nodes, colors, ref id, ref depth);
-            return new RawOctree() {
-                depth = depth,
-                root_node = mask,
-                root_color = color,
-                nodes = nodes,
-                colors = colors,
-            };
-        }
-
-        private static (int, Color32) LinearizeOctree(OctreeNode<Color32> node, int[] nodes, Color32[] colors, ref int id, ref int depth, int level = 0) {
-            Color color = default;
-            int count = 0;
-            int mask = 0;
-            int id0 = id, pos0 = id0 << 3;
-
-            if (depth < level) depth = level;
-
-            for (int i = 0; i < 8; i++) {
-                var subnode = node[i];
-                if (subnode == null) continue;
-
-                mask |= (1 << i);
-
-                if (subnode == node) {
-                    nodes[pos0 | i] = (id0 << 8) | 0xFF;
-                    colors[pos0 | i] = subnode.data;
-                } else {
-                    ++id;
-                    int subid = id;
-                    var (submask, subcolor) = LinearizeOctree(subnode, nodes, colors, ref id, ref depth, level+1);
-                    if (submask == 0) subid = 0;
-                    nodes[pos0 | i] = (subid << 8) | submask;
-                    colors[pos0 | i] = subcolor;
-                }
-
-                color.r += colors[pos0 | i].r;
-                color.g += colors[pos0 | i].g;
-                color.b += colors[pos0 | i].b;
-                color.a += colors[pos0 | i].a;
-                ++count;
-            }
-
-            if (count == 0) return (0, node.data);
-
-            float color_scale = 1f / (count * 255);
-            color.r *= color_scale;
-            color.g *= color_scale;
-            color.b *= color_scale;
-            color.a *= color_scale;
-
-            return (mask, color);
         }
     }
 
@@ -451,18 +236,7 @@ namespace dairin0d.Rendering.Octree2 {
 
         public int depth_display_shift = -1;
 
-        public Transform PointCloudsParent;
-        public float voxel_scale = 1f;
-        List<(float, Transform)> visible_objects = new List<(float, Transform)>(64);
-
-        public Color32 test_octree_color = Color.green;
-        public byte test_octree_mask = 0b10011001;
-        RawOctree test_octree; // for test
-
-        public bool use_model = false;
-        public string model_path = "";
-        public float voxel_size = -1;
-        RawOctree model_octree;
+        List<(float, ModelInstance)> visible_objects = new List<(float, ModelInstance)>(64);
 
         List<Widget<string>> InfoWidgets = new List<Widget<string>>(32);
         List<Widget<float>> SliderWidgets = new List<Widget<float>>(32);
@@ -480,10 +254,6 @@ namespace dairin0d.Rendering.Octree2 {
             buffer = new Buffer();
 
             splatter = new Splatter();
-
-            test_octree = RawOctree.MakeFractal(test_octree_mask, test_octree_color);
-
-            model_octree = RawOctree.LoadPointCloud(model_path, voxel_size);
         }
 
         void Update() {
@@ -607,7 +377,6 @@ namespace dairin0d.Rendering.Octree2 {
             ToggleWidgets.Clear();
             ToggleWidgets.Add(new Widget<bool>("Fullscreen", () => Screen.fullScreen,
                 (value) => { if (Screen.fullScreen != value) Screen.fullScreen = value; }));
-            ToggleWidgets.Add(new Widget<bool>("Use model", () => use_model, (value) => { use_model = value; }));
 
             splatter.UpdateWidgets(InfoWidgets, SliderWidgets, ToggleWidgets);
         }
@@ -630,59 +399,53 @@ namespace dairin0d.Rendering.Octree2 {
 
         void CollectRenderers() {
             visible_objects.Clear();
-            WalkChildren<Renderer>(PointCloudsParent, AddRenderer);
+            
+            foreach (var instance in ModelInstance.All) {
+                if (GeometryUtility.TestPlanesAABB(frustum_planes, instance.BoundingBox)) {
+                    var pos = instance.transform.position;
+                    float sort_z = pos.x * vp_matrix.m20 + pos.y * vp_matrix.m21 + pos.z * vp_matrix.m22;
+                    visible_objects.Add((sort_z, instance));
+                }
+            }
+            
             visible_objects.Sort((itemA, itemB) => {
                 return itemA.Item1.CompareTo(itemB.Item1);
             });
-
-            void AddRenderer(Renderer renderer) {
-                if (!renderer.enabled) return;
-                if (!renderer.gameObject.activeInHierarchy) return;
-                if (GeometryUtility.TestPlanesAABB(frustum_planes, renderer.bounds)) {
-                    var tfm = renderer.transform;
-                    var pos = tfm.position;
-                    float sort_z = pos.x * vp_matrix.m20 + pos.y * vp_matrix.m21 + pos.z * vp_matrix.m22;
-                    visible_objects.Add((sort_z, tfm));
-                }
-            }
-
-            void WalkChildren<T>(Transform parent, System.Action<T> callback) where T : Component {
-                if (!parent) return;
-                foreach (Transform child in parent) {
-                    var component = child.GetComponent<T>();
-                    if (component) callback(component);
-                    WalkChildren<T>(child, callback);
-                }
-            }
         }
 
         void RenderMain() {
-            var octree = test_octree;
-            if (use_model && (model_octree != null)) octree = model_octree;
-            
             UpdateCameraInfo();
             CollectRenderers();
 
-            buffer.RenderStart(cam.backgroundColor);
+            buffer.RenderStart(cam.backgroundColor, splatter.StencilMaskBits == 0);
             
-            splatter.RenderObjects(buffer, IterateInstances(octree));
+            splatter.RenderObjects(buffer, IterateInstances());
             
             buffer.RenderEnd(depth_display_shift);
         }
         
-        IEnumerable<(Matrix4x4, T)> IterateInstances<T>(T model) {
-            var voxel_scale_matrix = Matrix4x4.Scale(Vector3.one * voxel_scale);
-            
+        IEnumerable<(ModelInstance, Matrix4x4, int)> IterateInstances() {
             float depth_scale = (1 << depth_resolution) / (cam.farClipPlane - cam.nearClipPlane);
             var depth_scale_matrix = Matrix4x4.Scale(new Vector3(1, 1, depth_scale));
             
-            foreach (var (sort_z, tfm) in visible_objects) {
-                var obj2world = tfm.localToWorldMatrix * voxel_scale_matrix;
+            foreach (var (sort_z, instance) in visible_objects) {
+                var voxel_scale_matrix = Matrix4x4.Scale(Vector3.one * instance.Model.Bounds.size.z); // for now
+                var obj2world = instance.transform.localToWorldMatrix * voxel_scale_matrix;
                 var mvp_matrix = vp_matrix * obj2world;
                 mvp_matrix = depth_scale_matrix * mvp_matrix;
-                yield return (mvp_matrix, model);
+                yield return (instance, mvp_matrix, 0); // for now
             }
         }
+    }
+    
+    public struct NodeInfo {
+        public int Address; // where to load the subnode data from
+        public byte Mask;
+        public Color24 Color;
+    }
+    
+    public struct Color24 {
+        public byte R, G, B; // Alpha isn't used in splatting anyway
     }
     
     class Splatter {
@@ -707,7 +470,23 @@ namespace dairin0d.Rendering.Octree2 {
             public int x0, y0, x1, y1;
             public int mx0, my0, mx1, my1;
             public int depth, node, pixelShift, pixelSize;
+            public int parentOffset, readIndex, loadAddress;
         }
+        
+        // These are used for faster copying
+        struct IndexCache8 {
+            public int n0, n1, n2, n3, n4, n5, n6, n7;
+        }
+        struct InfoCache8 {
+            public NodeInfo n0, n1, n2, n3, n4, n5, n6, n7;
+        }
+        
+        int[] indexCache0 = new int[4*8*1024*1024];
+        int[] indexCache1 = new int[4*8*1024*1024];
+        NodeInfo[] infoCache0 = new NodeInfo[4*8*1024*1024];
+        NodeInfo[] infoCache1 = new NodeInfo[4*8*1024*1024];
+        Dictionary<(ModelInstance, int, int), int> sourceCacheOffsets = new Dictionary<(ModelInstance, int, int), int>();
+        Dictionary<(ModelInstance, int, int), int> targetCacheOffsets = new Dictionary<(ModelInstance, int, int), int>();
         
         public int MapShift = 5;
         OctantMap octantMap = new OctantMap();
@@ -721,12 +500,22 @@ namespace dairin0d.Rendering.Octree2 {
         
         public int StencilMaskBits = 0;
         
+        public bool UseMap = true;
+        
+        public bool UseLastY = true;
+        
+        public bool UseMaxCondition = true;
+        
+        public bool TestCache = false;
+        public int CacheCount;
+        
         public void UpdateWidgets(List<Widget<string>> infoWidgets, List<Widget<float>> sliderWidgets, List<Widget<bool>> toggleWidgets) {
             // infoWidgets.Add(new Widget<string>($"PixelCount={PixelCount}"));
             // infoWidgets.Add(new Widget<string>($"QuadCount={QuadCount}"));
             // infoWidgets.Add(new Widget<string>($"CulledCount={CulledCount}"));
             // infoWidgets.Add(new Widget<string>($"OccludedCount={OccludedCount}"));
             // infoWidgets.Add(new Widget<string>($"NodeCount={NodeCount}"));
+            infoWidgets.Add(new Widget<string>($"CacheCount={CacheCount}"));
 
             sliderWidgets.Add(new Widget<float>("Level", () => MaxLevel, (value) => { MaxLevel = (int)value; }, 0, 16));
             sliderWidgets.Add(new Widget<float>("RaycastAt", () => RaycastAt, (value) => { RaycastAt = (int)value; }, -1, 16));
@@ -735,14 +524,24 @@ namespace dairin0d.Rendering.Octree2 {
             sliderWidgets.Add(new Widget<float>("StencilMask", () => StencilMaskBits, (value) => { StencilMaskBits = (int)value; }, 0, 4));
 
             toggleWidgets.Add(new Widget<bool>("Use Raycast", () => UseRaycast, (value) => { UseRaycast = value; }));
+            toggleWidgets.Add(new Widget<bool>("Use Map", () => UseMap, (value) => { UseMap = value; }));
+            toggleWidgets.Add(new Widget<bool>("Use LastY", () => UseLastY, (value) => { UseLastY = value; }));
+            toggleWidgets.Add(new Widget<bool>("Use Max", () => UseMaxCondition, (value) => { UseMaxCondition = value; }));
+            toggleWidgets.Add(new Widget<bool>("Test Cache", () => TestCache, (value) => { TestCache = value; }));
         }
         
-        public unsafe void RenderObjects(Buffer buffer, IEnumerable<(Matrix4x4, RawOctree)> instances) {
+        public unsafe void RenderObjects(Buffer buffer, IEnumerable<(ModelInstance, Matrix4x4, int)> instances) {
             // PixelCount = 0;
             // QuadCount = 0;
             // CulledCount = 0;
             // OccludedCount = 0;
             // NodeCount = 0;
+
+            CacheCount = 0;
+            targetCacheOffsets.Clear();
+            // The zeroth element is used for "writing cached parent reference" of root nodes
+            // (the value is not used, this just avoids extra checks)
+            int writeIndex = 2;
 
             octantMap.Resize(MapShift);
 
@@ -751,19 +550,54 @@ namespace dairin0d.Rendering.Octree2 {
             fixed (uint* queues = OctantOrder.Queues)
             fixed (Delta* deltas = this.deltas)
             fixed (StackEntry* stack = this.stack)
-            fixed (int* map = octantMap.Data) {
+            fixed (int* map = octantMap.Data)
+            fixed (int* readIndexCache = indexCache0)
+            fixed (int* writeIndexCache = indexCache1)
+            fixed (NodeInfo* readInfoCache = infoCache0)
+            fixed (NodeInfo* writeInfoCache = infoCache1)
+            {
                 MaskDepth(buf, w, h, bufShift);
-                foreach (var (matrix, octree) in instances) {
-                    int maxDepth = octree.depth;
-                    int node = octree.root_node;
-                    var color = octree.root_color;
-                    fixed (int* nodes = octree.nodes)
-                    fixed (Color32* colors = octree.colors) {
+
+                foreach (var (instance, matrix, partIndex) in instances) {
+                    var model = instance.Model;
+                    var part = model.Parts[partIndex];
+                    var geometryIndex = part.Geometries[0];
+                    var octree = model.Geometries[geometryIndex] as RawOctree;
+
+                    int maxDepth = octree.MaxLevel;
+                    int node = octree.RootNode;
+                    var color = octree.RootColor;
+                    int mask = node & 0xFF;
+                    fixed (int* nodes = octree.Nodes)
+                    fixed (Color32* colors = octree.Colors)
+                    {
+                        var cacheOffsetKey = (instance, partIndex, geometryIndex);
+                        
+                        int writeIndexStart = writeIndex;
+                        
+                        if (!sourceCacheOffsets.TryGetValue(cacheOffsetKey, out var readIndex)) {
+                            readIndex = -1;
+                        }
+                        
+                        readIndex = (readIndex << 8) | mask;
+                        
                         Render(buf, w, h, bufShift, queues, deltas, stack, map,
-                            in matrix, maxDepth, node, color, nodes, colors);
+                            in matrix, maxDepth, node, color, nodes, colors,
+                            readIndexCache, writeIndexCache, readInfoCache, writeInfoCache,
+                            readIndex, ref writeIndex);
+                        
+                        if (writeIndex > writeIndexStart) {
+                            targetCacheOffsets[cacheOffsetKey] = writeIndexStart;
+                        }
                     }
                 }
             }
+            
+            CacheCount = writeIndex;
+            
+            (indexCache0, indexCache1) = (indexCache1, indexCache0);
+            (infoCache0, infoCache1) = (infoCache1, infoCache0);
+            (sourceCacheOffsets, targetCacheOffsets) = (targetCacheOffsets, sourceCacheOffsets);
         }
 
         unsafe void MaskDepth(Buffer.DataItem* buf, int w, int h, int bufShift) {
@@ -786,7 +620,9 @@ namespace dairin0d.Rendering.Octree2 {
 
         unsafe void Render(Buffer.DataItem* buf, int w, int h, int bufShift,
             uint* queues, Delta* deltas, StackEntry* stack, int* map,
-            in Matrix4x4 matrix, int maxDepth, int rootNode, Color32 rootColor, int* nodes, Color32* colors)
+            in Matrix4x4 matrix, int maxDepth, int rootNode, Color32 rootColor, int* nodes, Color32* colors,
+            int* readIndexCache, int* writeIndexCache, NodeInfo* readInfoCache, NodeInfo* writeInfoCache,
+            int readIndex, ref int writeIndex)
         {
             if (!UseRaycast) maxDepth++;
             
@@ -840,6 +676,14 @@ namespace dairin0d.Rendering.Octree2 {
             
             int defaultZ = int.MaxValue;
             
+            int ignoreMap = (UseMap ? 0 : 0xFF);
+            
+            bool useLastY = UseLastY;
+            bool useMax = UseMaxCondition;
+            
+            bool testCache = TestCache;
+            IndexCache8 emptyIndices = new IndexCache8 {n0=-1, n1=-1, n2=-1, n3=-1, n4=-1, n5=-1, n6=-1, n7=-1};
+            
             if (!UseRaycast)
             {
                 var curr = stack + 1;
@@ -856,11 +700,23 @@ namespace dairin0d.Rendering.Octree2 {
                 curr->state.mx1 = ((curr->state.x1 - startX) << potShiftDelta) + pixelHalf;
                 curr->state.my1 = ((curr->state.y1 - startY) << potShiftDelta) + pixelHalf;
                 
+                curr->state.parentOffset = 0;
+                curr->state.readIndex = readIndex;
+                curr->state.loadAddress = rootNode;
+                
                 while (curr > stack) {
                     var state = curr->state;
                     --curr;
                     
-                    if (state.depth >= raycastDepth) {
+                    int nodeOffset = ((state.node >> (8-3)) & (0xFFFFFF << 3));
+                    int nodeMask = state.node & 0xFF;
+                    
+                    if (testCache) {
+                        nodeOffset = ((state.readIndex >> (8-3)) & (0xFFFFFF << 3));
+                        nodeMask = state.readIndex & 0xFF;
+                    }
+                    
+                    if ((state.depth >= raycastDepth) & !testCache) {
                         var stackR = curr + 1;
                         var drawing = stackR + raycastOffset;
                         
@@ -870,16 +726,15 @@ namespace dairin0d.Rendering.Octree2 {
                             for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
                                 if (bufY[x].depth != defaultZ) continue;
                                 
-                                int mask = mapY[mx >> toMapShift] & state.node;
+                                int mask = mapY[mx >> toMapShift] & nodeMask;
                                 if (mask == 0) continue;
                                 
                                 var queue = forwardQueues[mask];
-                                int offset = (state.node >> (8-3)) & (0xFFFFFF << 3);
                                 
                                 for (; queue != 0; queue >>= 4) {
                                     int octant = unchecked((int)(queue & 7));
 
-                                    int node = nodes[offset|octant];
+                                    int node = nodes[nodeOffset|octant];
                                     
                                     int subx = (mx - deltas[octant].x) << 1;
                                     int suby = (my - deltas[octant].y) << 1;
@@ -890,71 +745,72 @@ namespace dairin0d.Rendering.Octree2 {
                                     if (mask == 0) continue;
 
                                     octant = unchecked((int)(forwardQueues[mask] & 7));
-                                    offset = (node >> (8-3)) & (0xFFFFFF << 3);
+                                    int offset = (node >> (8-3)) & (0xFFFFFF << 3);
                                     bufY[x].color = colors[offset|octant];
                                     bufY[x].depth = 1;
                                     break;
                                 }
                                 continue;
-                                
-                                // var currR = stackR;
-                                // currR->x = mx;
-                                // currR->y = my;
-                                // currR->queue = forwardQueues[mask];
-                                // currR->offset = (state.node >> (8-3)) & (0xFFFFFF << 3);
-                                
-                                // var nextR = currR + 1;
-                                
-                                // while (currR != drawing) {
-                                //     while (currR->queue == 0) {
-                                //         if (currR == stackR) goto skip;
-                                //         nextR = currR--;
-                                //     }
-                                    
-                                //     int octant = unchecked((int)(currR->queue & 7));
-                                //     currR->queue >>= 4;
-                                    
-                                //     nextR->x = (currR->x - deltas[octant].x) << 1;
-                                //     nextR->y = (currR->y - deltas[octant].y) << 1;
-                                //     int node = nodes[currR->offset|octant];
-                                    
-                                //     mask = map[((nextR->y >> yShift) & yMask) | (nextR->x >> xShift)] & node;
-                                //     if (mask == 0) continue;
-                                    
-                                //     nextR->queue = forwardQueues[mask];
-                                //     nextR->offset = (node >> (8-3)) & (0xFFFFFF << 3);
-                                    
-                                //     currR = nextR++;
-                                // }
-                                
-                                // {
-                                //     int octant = unchecked((int)(currR->queue & 7));
-                                //     bufY[x].color = colors[currR->offset|octant];
-                                //     bufY[x].depth = 1;
-                                // }
-                                
-                                // skip:;
                             }
                         }
                         continue;
                     }
                     
-                    if (state.depth >= maxDepth) {
-                    // if ((state.depth >= maxDepth) | (((state.x1-state.x0) | (state.y1-state.y0)) < 2)) {
-                        var colorData = colors + ((state.node >> (8-3)) & (0xFFFFFF << 3));
-                        for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
-                            var bufY = buf + (y << bufShift);
-                            var mapY = map + ((my >> toMapShift) << mapShift);
-                            for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
-                                int mask = mapY[mx >> toMapShift] & state.node;
-                                if ((mask != 0) & (bufY[x].depth == defaultZ)) {
-                                    int octant = unchecked((int)(forwardQueues[mask] & 7));
-                                    bufY[x].color = colorData[octant];
-                                    bufY[x].depth = 1;
+                    if (testCache & false) {
+                        bool sizeCondition = (useMax ? (state.x1-state.x0 < 1) | (state.y1-state.y0 < 1) : (((state.x1-state.x0) | (state.y1-state.y0)) < 1));
+                        
+                        //if (state.depth >= maxDepth) {
+                        if ((state.depth >= maxDepth+1) | sizeCondition) {
+                            var info = writeInfoCache + state.parentOffset;
+                            var color = new Color32 {r=info->Color.R, g=info->Color.G, b=info->Color.B, a=255};
+                            // for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
+                            //     var bufY = buf + (y << bufShift);
+                            //     var mapY = map + ((my >> toMapShift) << mapShift);
+                            //     for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
+                            //         int mask = mapY[mx >> toMapShift];
+                            //         if ((mask != 0) & (bufY[x].depth == defaultZ)) {
+                            //             bufY[x].color = color;
+                            //             bufY[x].depth = 1;
+                            //         }
+                            //     }
+                            // }
+                            for (int y = state.y0; y <= state.y1; y++) {
+                                var bufY = buf + (y << bufShift);
+                                for (int x = state.x0; x <= state.x1; x++) {
+                                    if (bufY[x].depth == defaultZ) {
+                                        bufY[x].color = color;
+                                        bufY[x].depth = 1;
+                                    }
                                 }
                             }
+                            
+                            continue;
                         }
-                        continue;
+                    } else {
+                        bool sizeCondition = (useMax ? (state.x1-state.x0 < 2) | (state.y1-state.y0 < 2) : (((state.x1-state.x0) | (state.y1-state.y0)) < 2));
+                        
+                        //if (state.depth >= maxDepth) {
+                        if ((state.depth >= maxDepth) | sizeCondition) {
+                            if (testCache) {
+                                nodeOffset = (state.loadAddress >> (8-3)) & (0xFFFFFF << 3);
+                            }
+
+                            var colorData = colors + nodeOffset;
+                            for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
+                                var bufY = buf + (y << bufShift);
+                                var mapY = map + ((my >> toMapShift) << mapShift);
+                                for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
+                                    int mask = mapY[mx >> toMapShift] & nodeMask;
+                                    if ((mask != 0) & (bufY[x].depth == defaultZ)) {
+                                        int octant = unchecked((int)(forwardQueues[mask] & 7));
+                                        bufY[x].color = colorData[octant];
+                                        bufY[x].depth = 1;
+                                    }
+                                }
+                            }
+                            
+                            continue;
+                        }
                     }
                     
                     int lastMY = state.my0;
@@ -964,9 +820,9 @@ namespace dairin0d.Rendering.Octree2 {
                         var bufY = buf + (y << bufShift);
                         var mapY = map + ((my >> toMapShift) << mapShift);
                         for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
-                            int mask = mapY[mx >> toMapShift] & state.node;
-                            if ((mask != 0) & (bufY[x].depth == defaultZ)) {
-                                lastMY = my;
+                            int mask = mapY[mx >> toMapShift] & nodeMask;
+                            if (((mask|ignoreMap) != 0) & (bufY[x].depth == defaultZ)) {
+                                if (useLastY) lastMY = my;
                                 goto traverse;
                             }
                         }
@@ -975,8 +831,65 @@ namespace dairin0d.Rendering.Octree2 {
                     traverse:;
                     
                     {
-                        var queue = reverseQueues[state.node & 0xFF];
-                        var nodeData = nodes + ((state.node >> (8-3)) & (0xFFFFFF << 3));
+                        // Calculate base parent offset for this node's children
+                        int parentOffset = writeIndex << 3;
+                        var info8 = writeInfoCache + parentOffset;
+                        var index8 = writeIndexCache + parentOffset;
+                        var index8read = index8;
+                        
+                        if (testCache) {
+                            // Write reference to this cached node in the parent
+                            writeIndexCache[state.parentOffset] = writeIndex;
+                            
+                            // Clear the cached node references
+                            *((IndexCache8*)index8) = emptyIndices;
+                            
+                            if (state.readIndex < 0) {
+                                // Unpack/cache the node data
+                                int offset = (state.loadAddress >> (8-3)) & (0xFFFFFF << 3);
+                                for (int octant = 0; octant < 8; octant++) {
+                                    int octantOffset = offset|octant;
+                                    var info = info8 + octant;
+                                    info->Address = nodes[octantOffset];
+                                    info->Mask = (byte)(info->Address & 0xFF);
+                                    info->Color.R = colors[octantOffset].r;
+                                    info->Color.G = colors[octantOffset].g;
+                                    info->Color.B = colors[octantOffset].b;
+                                }
+                            } else {
+                                int _readIndex = state.readIndex >> 8;
+                                index8read = readIndexCache + (_readIndex << 3);
+                                *((InfoCache8*)info8) = ((InfoCache8*)readInfoCache)[_readIndex];
+                            }
+                            
+                            writeIndex += 1;
+                            
+                            ///////////////////////////////////////////
+                            
+                            bool sizeCondition = (useMax ? (state.x1-state.x0 < 2) | (state.y1-state.y0 < 2) : (((state.x1-state.x0) | (state.y1-state.y0)) < 2));
+                            
+                            //if (state.depth >= maxDepth) {
+                            if ((state.depth >= maxDepth) | sizeCondition) {
+                                for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
+                                    var bufY = buf + (y << bufShift);
+                                    var mapY = map + ((my >> toMapShift) << mapShift);
+                                    for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
+                                        int mask = mapY[mx >> toMapShift] & nodeMask;
+                                        if ((mask != 0) & (bufY[x].depth == defaultZ)) {
+                                            int octant = unchecked((int)(forwardQueues[mask] & 7));
+                                            var color24 = info8[octant].Color;
+                                            bufY[x].color = new Color32 {r=color24.R, g=color24.G, b=color24.B, a=255};
+                                            bufY[x].depth = 1;
+                                        }
+                                    }
+                                }
+                                
+                                continue;
+                            }
+                        }
+                        
+                        var queue = reverseQueues[nodeMask];
+                        var nodeData = nodes + nodeOffset;
                         
                         int borderX0 = state.mx0 - (state.pixelSize-1);
                         int borderY0 = state.my0 - (state.pixelSize-1);
@@ -1007,7 +920,9 @@ namespace dairin0d.Rendering.Octree2 {
                             
                             ++curr;
                             curr->state.depth = state.depth+1;
+                            if (!testCache) {
                             curr->state.node = nodeData[octant];
+                            }
                             curr->state.pixelShift = state.pixelShift + 1;
                             curr->state.pixelSize = state.pixelSize << 1;
                             curr->state.x0 = x0;
@@ -1018,6 +933,12 @@ namespace dairin0d.Rendering.Octree2 {
                             curr->state.my0 = (state.my0 + (dy0 << state.pixelShift) - deltas[octant].y) << 1;
                             curr->state.mx1 = curr->state.mx0 + ((x1 - x0) << curr->state.pixelShift);
                             curr->state.my1 = curr->state.my0 + ((y1 - y0) << curr->state.pixelShift);
+                            
+                            if (testCache) {
+                            curr->state.parentOffset = parentOffset | octant;
+                            curr->state.readIndex = (index8read[octant] << 8) | info8[octant].Mask;
+                            curr->state.loadAddress = info8[octant].Address;
+                            }
                         }
                     }
                 }
