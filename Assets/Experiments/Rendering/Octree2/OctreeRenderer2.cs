@@ -503,6 +503,8 @@ namespace dairin0d.Rendering.Octree2 {
         
         public int CacheCount;
         
+        public bool UpdateCache = true;
+        
         public void UpdateWidgets(List<Widget<string>> infoWidgets, List<Widget<float>> sliderWidgets, List<Widget<bool>> toggleWidgets) {
             // infoWidgets.Add(new Widget<string>($"PixelCount={PixelCount}"));
             // infoWidgets.Add(new Widget<string>($"QuadCount={QuadCount}"));
@@ -518,6 +520,7 @@ namespace dairin0d.Rendering.Octree2 {
 
             toggleWidgets.Add(new Widget<bool>("Use Map", () => UseMap, (value) => { UseMap = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Max", () => UseMaxCondition, (value) => { UseMaxCondition = value; }));
+            toggleWidgets.Add(new Widget<bool>("Update Cache", () => UpdateCache, (value) => { UpdateCache = value; }));
         }
         
         public unsafe void RenderObjects(Buffer buffer, IEnumerable<(ModelInstance, Matrix4x4, int)> instances) {
@@ -667,6 +670,8 @@ namespace dairin0d.Rendering.Octree2 {
             
             bool useMax = UseMaxCondition;
             
+            bool updateCache = UpdateCache;
+            
             IndexCache8 emptyIndices = new IndexCache8 {n0=-1, n1=-1, n2=-1, n3=-1, n4=-1, n5=-1, n6=-1, n7=-1};
             
             var curr = stack + 1;
@@ -734,8 +739,57 @@ namespace dairin0d.Rendering.Octree2 {
                 ///////////////////////////////////////////
                 
                 bool sizeCondition = (useMax ? (state.x1-state.x0 < 2) | (state.y1-state.y0 < 2) : (((state.x1-state.x0) | (state.y1-state.y0)) < 2));
+                bool shouldDraw = (state.depth >= maxDepth) | sizeCondition;
+                shouldDraw |= !updateCache & (state.readIndex < 0);
                 
-                if ((state.depth >= maxDepth) | sizeCondition) {
+                if (!shouldDraw) {
+                    var queue = reverseQueues[nodeMask];
+                    
+                    int borderX0 = state.mx0 - (state.pixelSize-1);
+                    int borderY0 = state.my0 - (state.pixelSize-1);
+                    int borderX1 = state.mx1 + (state.pixelSize-1);
+                    int borderY1 = state.my1 + (state.pixelSize-1);
+                    
+                    lastMY = lastMY - borderY0;
+                    
+                    for (; queue != 0; queue >>= 4) {
+                        int octant = unchecked((int)(queue & 7));
+                        
+                        int dx0 = deltas[octant].x0 - borderX0;
+                        int dy0 = deltas[octant].y0 - borderY0;
+                        int dx1 = borderX1 - deltas[octant].x1;
+                        int dy1 = borderY1 - deltas[octant].y1;
+                        dy0 = (dy0 > lastMY ? dy0 : lastMY);
+                        dx0 = (dx0 < 0 ? 0 : dx0) >> state.pixelShift;
+                        dy0 = (dy0 < 0 ? 0 : dy0) >> state.pixelShift;
+                        dx1 = (dx1 < 0 ? 0 : dx1) >> state.pixelShift;
+                        dy1 = (dy1 < 0 ? 0 : dy1) >> state.pixelShift;
+                        
+                        int x0 = state.x0 + dx0;
+                        int y0 = state.y0 + dy0;
+                        int x1 = state.x1 - dx1;
+                        int y1 = state.y1 - dy1;
+                        
+                        if ((x0 > x1) | (y0 > y1)) continue;
+                        
+                        ++curr;
+                        curr->state.depth = state.depth+1;
+                        curr->state.pixelShift = state.pixelShift + 1;
+                        curr->state.pixelSize = state.pixelSize << 1;
+                        curr->state.x0 = x0;
+                        curr->state.y0 = y0;
+                        curr->state.x1 = x1;
+                        curr->state.y1 = y1;
+                        curr->state.mx0 = (state.mx0 + (dx0 << state.pixelShift) - deltas[octant].x) << 1;
+                        curr->state.my0 = (state.my0 + (dy0 << state.pixelShift) - deltas[octant].y) << 1;
+                        curr->state.mx1 = curr->state.mx0 + ((x1 - x0) << curr->state.pixelShift);
+                        curr->state.my1 = curr->state.my0 + ((y1 - y0) << curr->state.pixelShift);
+                        
+                        curr->state.parentOffset = parentOffset | octant;
+                        curr->state.readIndex = (index8read[octant] << 8) | info8[octant].Mask;
+                        curr->state.loadAddress = info8[octant].Address;
+                    }
+                } else {
                     for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
                         var bufY = buf + (y << bufShift);
                         var mapY = map + ((my >> toMapShift) << mapShift);
@@ -749,55 +803,6 @@ namespace dairin0d.Rendering.Octree2 {
                             }
                         }
                     }
-                    
-                    continue;
-                }
-                
-                var queue = reverseQueues[nodeMask];
-                
-                int borderX0 = state.mx0 - (state.pixelSize-1);
-                int borderY0 = state.my0 - (state.pixelSize-1);
-                int borderX1 = state.mx1 + (state.pixelSize-1);
-                int borderY1 = state.my1 + (state.pixelSize-1);
-                
-                lastMY = lastMY - borderY0;
-                
-                for (; queue != 0; queue >>= 4) {
-                    int octant = unchecked((int)(queue & 7));
-                    
-                    int dx0 = deltas[octant].x0 - borderX0;
-                    int dy0 = deltas[octant].y0 - borderY0;
-                    int dx1 = borderX1 - deltas[octant].x1;
-                    int dy1 = borderY1 - deltas[octant].y1;
-                    dy0 = (dy0 > lastMY ? dy0 : lastMY);
-                    dx0 = (dx0 < 0 ? 0 : dx0) >> state.pixelShift;
-                    dy0 = (dy0 < 0 ? 0 : dy0) >> state.pixelShift;
-                    dx1 = (dx1 < 0 ? 0 : dx1) >> state.pixelShift;
-                    dy1 = (dy1 < 0 ? 0 : dy1) >> state.pixelShift;
-                    
-                    int x0 = state.x0 + dx0;
-                    int y0 = state.y0 + dy0;
-                    int x1 = state.x1 - dx1;
-                    int y1 = state.y1 - dy1;
-                    
-                    if ((x0 > x1) | (y0 > y1)) continue;
-                    
-                    ++curr;
-                    curr->state.depth = state.depth+1;
-                    curr->state.pixelShift = state.pixelShift + 1;
-                    curr->state.pixelSize = state.pixelSize << 1;
-                    curr->state.x0 = x0;
-                    curr->state.y0 = y0;
-                    curr->state.x1 = x1;
-                    curr->state.y1 = y1;
-                    curr->state.mx0 = (state.mx0 + (dx0 << state.pixelShift) - deltas[octant].x) << 1;
-                    curr->state.my0 = (state.my0 + (dy0 << state.pixelShift) - deltas[octant].y) << 1;
-                    curr->state.mx1 = curr->state.mx0 + ((x1 - x0) << curr->state.pixelShift);
-                    curr->state.my1 = curr->state.my0 + ((y1 - y0) << curr->state.pixelShift);
-                    
-                    curr->state.parentOffset = parentOffset | octant;
-                    curr->state.readIndex = (index8read[octant] << 8) | info8[octant].Mask;
-                    curr->state.loadAddress = info8[octant].Address;
                 }
             }
         }
