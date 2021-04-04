@@ -469,7 +469,7 @@ namespace dairin0d.Rendering.Octree2 {
         struct NodeState {
             public int x0, y0, x1, y1;
             public int mx0, my0, mx1, my1;
-            public int depth, node, pixelShift, pixelSize;
+            public int depth, pixelShift, pixelSize;
             public int parentOffset, readIndex, loadAddress;
         }
         
@@ -492,9 +492,6 @@ namespace dairin0d.Rendering.Octree2 {
         OctantMap octantMap = new OctantMap();
         
         public int MaxLevel = 0;
-        public int RaycastAt = -1;
-        
-        public bool UseRaycast = false;
         
         public float DrawBias = 1;
         
@@ -502,13 +499,9 @@ namespace dairin0d.Rendering.Octree2 {
         
         public bool UseMap = true;
         
-        public bool UseLastY = true;
-        
         public bool UseMaxCondition = true;
         
-        public bool TestCache = false;
         public int CacheCount;
-        public bool UseLoadFunc = false;
         
         public void UpdateWidgets(List<Widget<string>> infoWidgets, List<Widget<float>> sliderWidgets, List<Widget<bool>> toggleWidgets) {
             // infoWidgets.Add(new Widget<string>($"PixelCount={PixelCount}"));
@@ -519,17 +512,12 @@ namespace dairin0d.Rendering.Octree2 {
             infoWidgets.Add(new Widget<string>($"CacheCount={CacheCount}"));
 
             sliderWidgets.Add(new Widget<float>("Level", () => MaxLevel, (value) => { MaxLevel = (int)value; }, 0, 16));
-            sliderWidgets.Add(new Widget<float>("RaycastAt", () => RaycastAt, (value) => { RaycastAt = (int)value; }, -1, 16));
             sliderWidgets.Add(new Widget<float>("MapShift", () => MapShift, (value) => { MapShift = (int)value; }, OctantMap.MinShift, OctantMap.MaxShift));
             sliderWidgets.Add(new Widget<float>("DrawBias", () => DrawBias, (value) => { DrawBias = value; }, 0.25f, 4f));
             sliderWidgets.Add(new Widget<float>("StencilMask", () => StencilMaskBits, (value) => { StencilMaskBits = (int)value; }, 0, 4));
 
-            toggleWidgets.Add(new Widget<bool>("Use Raycast", () => UseRaycast, (value) => { UseRaycast = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Map", () => UseMap, (value) => { UseMap = value; }));
-            toggleWidgets.Add(new Widget<bool>("Use LastY", () => UseLastY, (value) => { UseLastY = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Max", () => UseMaxCondition, (value) => { UseMaxCondition = value; }));
-            toggleWidgets.Add(new Widget<bool>("Test Cache", () => TestCache, (value) => { TestCache = value; }));
-            toggleWidgets.Add(new Widget<bool>("Use Load Func", () => UseLoadFunc, (value) => { UseLoadFunc = value; }));
         }
         
         public unsafe void RenderObjects(Buffer buffer, IEnumerable<(ModelInstance, Matrix4x4, int)> instances) {
@@ -628,7 +616,7 @@ namespace dairin0d.Rendering.Octree2 {
             int* readIndexCache, int* writeIndexCache, NodeInfo* readInfoCache, NodeInfo* writeInfoCache,
             int readIndex, ref int writeIndex, LoadFuncDelegate loadFunc)
         {
-            if (!UseRaycast) maxDepth++;
+            maxDepth++;
             
             Setup(in matrix, ref maxDepth, out int potShift, out int centerX, out int centerY,
                 out int boundsX0, out int boundsY0, out int boundsX1, out int boundsY1);
@@ -667,11 +655,6 @@ namespace dairin0d.Rendering.Octree2 {
             maxDepth -= 1; // draw at 1 level above max depth
             maxDepth = Mathf.Clamp(maxDepth, 0, MaxLevel);
             
-            if (RaycastAt >= 0) RaycastAt = 1;
-            
-            int raycastDepth = (RaycastAt < 0 ? maxDepth + 32 : Mathf.Clamp(maxDepth - RaycastAt, 1, maxDepth));
-            int raycastOffset = Mathf.Max(maxDepth - raycastDepth, 0);
-            
             int xShift = toMapShift;
             int yShift = toMapShift - mapShift;
             int yMask = ~((1 << mapShift) - 1);
@@ -682,305 +665,139 @@ namespace dairin0d.Rendering.Octree2 {
             
             int ignoreMap = (UseMap ? 0 : 0xFF);
             
-            bool useLastY = UseLastY;
             bool useMax = UseMaxCondition;
             
-            bool testCache = TestCache;
-            bool useLoadFunc = UseLoadFunc;
             IndexCache8 emptyIndices = new IndexCache8 {n0=-1, n1=-1, n2=-1, n3=-1, n4=-1, n5=-1, n6=-1, n7=-1};
             
-            if (!UseRaycast)
-            {
-                var curr = stack + 1;
-                curr->state.depth = 1;
-                curr->state.node = rootNode;
-                curr->state.pixelShift = potShiftDelta;
-                curr->state.pixelSize = 1 << curr->state.pixelShift;
-                curr->state.x0 = (minPX < 0 ? 0 : minPX);
-                curr->state.y0 = (minPY < 0 ? 0 : minPY);
-                curr->state.x1 = (maxPX >= w ? w-1 : maxPX);
-                curr->state.y1 = (maxPY >= h ? h-1 : maxPY);
-                curr->state.mx0 = ((curr->state.x0 - startX) << potShiftDelta) + pixelHalf;
-                curr->state.my0 = ((curr->state.y0 - startY) << potShiftDelta) + pixelHalf;
-                curr->state.mx1 = ((curr->state.x1 - startX) << potShiftDelta) + pixelHalf;
-                curr->state.my1 = ((curr->state.y1 - startY) << potShiftDelta) + pixelHalf;
+            var curr = stack + 1;
+            curr->state.depth = 1;
+            curr->state.pixelShift = potShiftDelta;
+            curr->state.pixelSize = 1 << curr->state.pixelShift;
+            curr->state.x0 = (minPX < 0 ? 0 : minPX);
+            curr->state.y0 = (minPY < 0 ? 0 : minPY);
+            curr->state.x1 = (maxPX >= w ? w-1 : maxPX);
+            curr->state.y1 = (maxPY >= h ? h-1 : maxPY);
+            curr->state.mx0 = ((curr->state.x0 - startX) << potShiftDelta) + pixelHalf;
+            curr->state.my0 = ((curr->state.y0 - startY) << potShiftDelta) + pixelHalf;
+            curr->state.mx1 = ((curr->state.x1 - startX) << potShiftDelta) + pixelHalf;
+            curr->state.my1 = ((curr->state.y1 - startY) << potShiftDelta) + pixelHalf;
+            
+            curr->state.parentOffset = 0;
+            curr->state.readIndex = readIndex;
+            curr->state.loadAddress = rootNode;
+            
+            while (curr > stack) {
+                var state = curr->state;
+                --curr;
                 
-                curr->state.parentOffset = 0;
-                curr->state.readIndex = readIndex;
-                curr->state.loadAddress = rootNode;
+                int nodeMask = state.readIndex & 0xFF;
                 
-                while (curr > stack) {
-                    var state = curr->state;
-                    --curr;
-                    
-                    int nodeOffset = ((state.node >> (8-3)) & (0xFFFFFF << 3));
-                    int nodeMask = state.node & 0xFF;
-                    
-                    if (testCache) {
-                        nodeOffset = ((state.readIndex >> (8-3)) & (0xFFFFFF << 3));
-                        nodeMask = state.readIndex & 0xFF;
-                    }
-                    
-                    if ((state.depth >= raycastDepth) & !testCache) {
-                        var stackR = curr + 1;
-                        var drawing = stackR + raycastOffset;
-                        
-                        for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
-                            var bufY = buf + (y << bufShift);
-                            var mapY = map + ((my >> toMapShift) << mapShift);
-                            for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
-                                if (bufY[x].depth != defaultZ) continue;
-                                
-                                int mask = mapY[mx >> toMapShift] & nodeMask;
-                                if (mask == 0) continue;
-                                
-                                var queue = forwardQueues[mask];
-                                
-                                for (; queue != 0; queue >>= 4) {
-                                    int octant = unchecked((int)(queue & 7));
-
-                                    int node = nodes[nodeOffset|octant];
-                                    
-                                    int subx = (mx - deltas[octant].x) << 1;
-                                    int suby = (my - deltas[octant].y) << 1;
-                                    if (((subx|suby) & PrecisionMaskInv) != 0) continue; // sometimes out-of-bounds still happens
-                                    
-                                    //mask = map[(((my - deltas[octant].y) >> yShift1) & yMask) | ((mx - deltas[octant].x) >> xShift1)] & node;
-                                    mask = map[((suby >> yShift) & yMask) | (subx >> xShift)] & node;
-                                    if (mask == 0) continue;
-
-                                    octant = unchecked((int)(forwardQueues[mask] & 7));
-                                    int offset = (node >> (8-3)) & (0xFFFFFF << 3);
-                                    bufY[x].color = colors[offset|octant];
-                                    bufY[x].depth = 1;
-                                    break;
-                                }
-                                continue;
-                            }
-                        }
-                        continue;
-                    }
-                    
-                    if (!testCache) {
-                        bool sizeCondition = (useMax ? (state.x1-state.x0 < 2) | (state.y1-state.y0 < 2) : (((state.x1-state.x0) | (state.y1-state.y0)) < 2));
-                        
-                        //if (state.depth >= maxDepth) {
-                        if ((state.depth >= maxDepth) | sizeCondition) {
-                            if (testCache) {
-                                nodeOffset = (state.loadAddress >> (8-3)) & (0xFFFFFF << 3);
-                            }
-
-                            var colorData = colors + nodeOffset;
-                            for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
-                                var bufY = buf + (y << bufShift);
-                                var mapY = map + ((my >> toMapShift) << mapShift);
-                                for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
-                                    int mask = mapY[mx >> toMapShift] & nodeMask;
-                                    if ((mask != 0) & (bufY[x].depth == defaultZ)) {
-                                        int octant = unchecked((int)(forwardQueues[mask] & 7));
-                                        bufY[x].color = colorData[octant];
-                                        bufY[x].depth = 1;
-                                    }
-                                }
-                            }
-                            
-                            continue;
+                int lastMY = state.my0;
+                
+                // Occlusion test
+                for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
+                    var bufY = buf + (y << bufShift);
+                    var mapY = map + ((my >> toMapShift) << mapShift);
+                    for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
+                        int mask = mapY[mx >> toMapShift] & nodeMask;
+                        if (((mask|ignoreMap) != 0) & (bufY[x].depth == defaultZ)) {
+                            lastMY = my;
+                            goto traverse;
                         }
                     }
-                    
-                    int lastMY = state.my0;
-                    
-                    // Occlusion test
+                }
+                continue;
+                traverse:;
+                
+                // Calculate base parent offset for this node's children
+                int parentOffset = writeIndex << 3;
+                var info8 = writeInfoCache + parentOffset;
+                var index8 = writeIndexCache + parentOffset;
+                var index8read = index8;
+                
+                // Write reference to this cached node in the parent
+                writeIndexCache[state.parentOffset] = writeIndex;
+                
+                // Clear the cached node references
+                *((IndexCache8*)index8) = emptyIndices;
+                
+                if (state.readIndex < 0) {
+                    loadFunc(state.loadAddress, info8, nodes, colors);
+                } else {
+                    int _readIndex = state.readIndex >> 8;
+                    index8read = readIndexCache + (_readIndex << 3);
+                    *((InfoCache8*)info8) = ((InfoCache8*)readInfoCache)[_readIndex];
+                }
+                
+                writeIndex += 1;
+                
+                ///////////////////////////////////////////
+                
+                bool sizeCondition = (useMax ? (state.x1-state.x0 < 2) | (state.y1-state.y0 < 2) : (((state.x1-state.x0) | (state.y1-state.y0)) < 2));
+                
+                if ((state.depth >= maxDepth) | sizeCondition) {
                     for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
                         var bufY = buf + (y << bufShift);
                         var mapY = map + ((my >> toMapShift) << mapShift);
                         for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
                             int mask = mapY[mx >> toMapShift] & nodeMask;
-                            if (((mask|ignoreMap) != 0) & (bufY[x].depth == defaultZ)) {
-                                if (useLastY) lastMY = my;
-                                goto traverse;
+                            if ((mask != 0) & (bufY[x].depth == defaultZ)) {
+                                int octant = unchecked((int)(forwardQueues[mask] & 7));
+                                var color24 = info8[octant].Color;
+                                bufY[x].color = new Color32 {r=color24.R, g=color24.G, b=color24.B, a=255};
+                                bufY[x].depth = 1;
                             }
                         }
                     }
-                    continue;
-                    traverse:;
                     
-                    {
-                        // Calculate base parent offset for this node's children
-                        int parentOffset = writeIndex << 3;
-                        var info8 = writeInfoCache + parentOffset;
-                        var index8 = writeIndexCache + parentOffset;
-                        var index8read = index8;
-                        
-                        if (testCache) {
-                            // Write reference to this cached node in the parent
-                            writeIndexCache[state.parentOffset] = writeIndex;
-                            
-                            // Clear the cached node references
-                            *((IndexCache8*)index8) = emptyIndices;
-                            
-                            if (state.readIndex < 0) {
-                                if (useLoadFunc) {
-                                    loadFunc(state.loadAddress, info8, nodes, colors);
-                                } else {
-                                    // Unpack/cache the node data
-                                    int offset = (state.loadAddress >> (8-3)) & (0xFFFFFF << 3);
-                                    for (int octant = 0; octant < 8; octant++) {
-                                        int octantOffset = offset|octant;
-                                        var info = info8 + octant;
-                                        info->Address = nodes[octantOffset];
-                                        info->Mask = (byte)(info->Address & 0xFF);
-                                        info->Color.R = colors[octantOffset].r;
-                                        info->Color.G = colors[octantOffset].g;
-                                        info->Color.B = colors[octantOffset].b;
-                                    }
-                                }
-                            } else {
-                                int _readIndex = state.readIndex >> 8;
-                                index8read = readIndexCache + (_readIndex << 3);
-                                *((InfoCache8*)info8) = ((InfoCache8*)readInfoCache)[_readIndex];
-                            }
-                            
-                            writeIndex += 1;
-                            
-                            ///////////////////////////////////////////
-                            
-                            bool sizeCondition = (useMax ? (state.x1-state.x0 < 2) | (state.y1-state.y0 < 2) : (((state.x1-state.x0) | (state.y1-state.y0)) < 2));
-                            
-                            //if (state.depth >= maxDepth) {
-                            if ((state.depth >= maxDepth) | sizeCondition) {
-                                for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
-                                    var bufY = buf + (y << bufShift);
-                                    var mapY = map + ((my >> toMapShift) << mapShift);
-                                    for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
-                                        int mask = mapY[mx >> toMapShift] & nodeMask;
-                                        if ((mask != 0) & (bufY[x].depth == defaultZ)) {
-                                            int octant = unchecked((int)(forwardQueues[mask] & 7));
-                                            var color24 = info8[octant].Color;
-                                            bufY[x].color = new Color32 {r=color24.R, g=color24.G, b=color24.B, a=255};
-                                            bufY[x].depth = 1;
-                                        }
-                                    }
-                                }
-                                
-                                continue;
-                            }
-                        }
-                        
-                        var queue = reverseQueues[nodeMask];
-                        var nodeData = nodes + nodeOffset;
-                        
-                        int borderX0 = state.mx0 - (state.pixelSize-1);
-                        int borderY0 = state.my0 - (state.pixelSize-1);
-                        int borderX1 = state.mx1 + (state.pixelSize-1);
-                        int borderY1 = state.my1 + (state.pixelSize-1);
-                        
-                        lastMY = lastMY - borderY0;
-                        
-                        for (; queue != 0; queue >>= 4) {
-                            int octant = unchecked((int)(queue & 7));
-                            
-                            int dx0 = deltas[octant].x0 - borderX0;
-                            int dy0 = deltas[octant].y0 - borderY0;
-                            int dx1 = borderX1 - deltas[octant].x1;
-                            int dy1 = borderY1 - deltas[octant].y1;
-                            dy0 = (dy0 > lastMY ? dy0 : lastMY);
-                            dx0 = (dx0 < 0 ? 0 : dx0) >> state.pixelShift;
-                            dy0 = (dy0 < 0 ? 0 : dy0) >> state.pixelShift;
-                            dx1 = (dx1 < 0 ? 0 : dx1) >> state.pixelShift;
-                            dy1 = (dy1 < 0 ? 0 : dy1) >> state.pixelShift;
-                            
-                            int x0 = state.x0 + dx0;
-                            int y0 = state.y0 + dy0;
-                            int x1 = state.x1 - dx1;
-                            int y1 = state.y1 - dy1;
-                            
-                            if ((x0 > x1) | (y0 > y1)) continue;
-                            
-                            ++curr;
-                            curr->state.depth = state.depth+1;
-                            if (!testCache) {
-                            curr->state.node = nodeData[octant];
-                            }
-                            curr->state.pixelShift = state.pixelShift + 1;
-                            curr->state.pixelSize = state.pixelSize << 1;
-                            curr->state.x0 = x0;
-                            curr->state.y0 = y0;
-                            curr->state.x1 = x1;
-                            curr->state.y1 = y1;
-                            curr->state.mx0 = (state.mx0 + (dx0 << state.pixelShift) - deltas[octant].x) << 1;
-                            curr->state.my0 = (state.my0 + (dy0 << state.pixelShift) - deltas[octant].y) << 1;
-                            curr->state.mx1 = curr->state.mx0 + ((x1 - x0) << curr->state.pixelShift);
-                            curr->state.my1 = curr->state.my0 + ((y1 - y0) << curr->state.pixelShift);
-                            
-                            if (testCache) {
-                            curr->state.parentOffset = parentOffset | octant;
-                            curr->state.readIndex = (index8read[octant] << 8) | info8[octant].Mask;
-                            curr->state.loadAddress = info8[octant].Address;
-                            }
-                        }
-                    }
+                    continue;
                 }
-            }
-            else
-            {
-                var drawing = stack + maxDepth;
                 
-                int x0 = (minPX < 0 ? 0 : minPX);
-                int y0 = (minPY < 0 ? 0 : minPY);
-                int x1 = (maxPX > w ? w : maxPX);
-                int y1 = (maxPY > h ? h : maxPY);
-                for (int y = y0, my = ((y - startY) << potShiftDelta) + pixelHalf; y < y1; y++, my += pixelSize) {
-                    int iy = y << bufShift;
-                    int imapY = (my >> toMapShift) << mapShift;
-                    for (int x = x0, mx = ((x - startX) << potShiftDelta) + pixelHalf; x < x1; x++, mx += pixelSize) {
-                        int mapX = (mx >> toMapShift);
-                        
-                        if (buf[x|iy].depth != defaultZ) continue;
-                        
-                        int mask = map[mapX | imapY] & rootNode;
-                        if (mask == 0) goto skip;
-                        
-                        stack->x = mx;
-                        stack->y = my;
-                        stack->queue = forwardQueues[mask];
-                        stack->offset = (rootNode >> (8-3)) & (0xFFFFFF << 3);
-                        
-                        var curr = stack;
-                        var next = curr + 1;
-                        
-                        while (curr != drawing) {
-                            while (curr->queue == 0) {
-                                if (curr == stack) goto skip;
-                                next = curr--;
-                            }
-                            
-                            int octant = unchecked((int)(curr->queue & 7));
-                            curr->queue >>= 4;
-                            
-                            next->x = (curr->x - deltas[octant].x) << 1;
-                            next->y = (curr->y - deltas[octant].y) << 1;
-                            int node = nodes[curr->offset|octant];
-                            
-                            if (((next->x|next->y) & PrecisionMaskInv) != 0) continue; // sometimes out-of-bounds still happens
-                            
-                            mask = map[((next->y >> yShift) & yMask) | (next->x >> xShift)] & node;
-                            if (mask == 0) continue;
-                            
-                            next->queue = forwardQueues[mask];
-                            next->offset = (node >> (8-3)) & (0xFFFFFF << 3);
-                            
-                            curr = next++;
-                        }
-                        
-                        {
-                            int octant = unchecked((int)(curr->queue & 7));
-                            buf[x|iy].color = colors[curr->offset|octant];
-                            buf[x|iy].depth = 1;
-                        }
-                        
-                        skip:;
-                    }
+                var queue = reverseQueues[nodeMask];
+                
+                int borderX0 = state.mx0 - (state.pixelSize-1);
+                int borderY0 = state.my0 - (state.pixelSize-1);
+                int borderX1 = state.mx1 + (state.pixelSize-1);
+                int borderY1 = state.my1 + (state.pixelSize-1);
+                
+                lastMY = lastMY - borderY0;
+                
+                for (; queue != 0; queue >>= 4) {
+                    int octant = unchecked((int)(queue & 7));
+                    
+                    int dx0 = deltas[octant].x0 - borderX0;
+                    int dy0 = deltas[octant].y0 - borderY0;
+                    int dx1 = borderX1 - deltas[octant].x1;
+                    int dy1 = borderY1 - deltas[octant].y1;
+                    dy0 = (dy0 > lastMY ? dy0 : lastMY);
+                    dx0 = (dx0 < 0 ? 0 : dx0) >> state.pixelShift;
+                    dy0 = (dy0 < 0 ? 0 : dy0) >> state.pixelShift;
+                    dx1 = (dx1 < 0 ? 0 : dx1) >> state.pixelShift;
+                    dy1 = (dy1 < 0 ? 0 : dy1) >> state.pixelShift;
+                    
+                    int x0 = state.x0 + dx0;
+                    int y0 = state.y0 + dy0;
+                    int x1 = state.x1 - dx1;
+                    int y1 = state.y1 - dy1;
+                    
+                    if ((x0 > x1) | (y0 > y1)) continue;
+                    
+                    ++curr;
+                    curr->state.depth = state.depth+1;
+                    curr->state.pixelShift = state.pixelShift + 1;
+                    curr->state.pixelSize = state.pixelSize << 1;
+                    curr->state.x0 = x0;
+                    curr->state.y0 = y0;
+                    curr->state.x1 = x1;
+                    curr->state.y1 = y1;
+                    curr->state.mx0 = (state.mx0 + (dx0 << state.pixelShift) - deltas[octant].x) << 1;
+                    curr->state.my0 = (state.my0 + (dy0 << state.pixelShift) - deltas[octant].y) << 1;
+                    curr->state.mx1 = curr->state.mx0 + ((x1 - x0) << curr->state.pixelShift);
+                    curr->state.my1 = curr->state.my0 + ((y1 - y0) << curr->state.pixelShift);
+                    
+                    curr->state.parentOffset = parentOffset | octant;
+                    curr->state.readIndex = (index8read[octant] << 8) | info8[octant].Mask;
+                    curr->state.loadAddress = info8[octant].Address;
                 }
             }
         }
