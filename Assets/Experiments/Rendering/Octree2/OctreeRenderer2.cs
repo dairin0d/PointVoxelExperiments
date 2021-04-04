@@ -761,37 +761,7 @@ namespace dairin0d.Rendering.Octree2 {
                         continue;
                     }
                     
-                    if (testCache & false) {
-                        bool sizeCondition = (useMax ? (state.x1-state.x0 < 1) | (state.y1-state.y0 < 1) : (((state.x1-state.x0) | (state.y1-state.y0)) < 1));
-                        
-                        //if (state.depth >= maxDepth) {
-                        if ((state.depth >= maxDepth+1) | sizeCondition) {
-                            var info = writeInfoCache + state.parentOffset;
-                            var color = new Color32 {r=info->Color.R, g=info->Color.G, b=info->Color.B, a=255};
-                            // for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
-                            //     var bufY = buf + (y << bufShift);
-                            //     var mapY = map + ((my >> toMapShift) << mapShift);
-                            //     for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
-                            //         int mask = mapY[mx >> toMapShift];
-                            //         if ((mask != 0) & (bufY[x].depth == defaultZ)) {
-                            //             bufY[x].color = color;
-                            //             bufY[x].depth = 1;
-                            //         }
-                            //     }
-                            // }
-                            for (int y = state.y0; y <= state.y1; y++) {
-                                var bufY = buf + (y << bufShift);
-                                for (int x = state.x0; x <= state.x1; x++) {
-                                    if (bufY[x].depth == defaultZ) {
-                                        bufY[x].color = color;
-                                        bufY[x].depth = 1;
-                                    }
-                                }
-                            }
-                            
-                            continue;
-                        }
-                    } else {
+                    if (!testCache) {
                         bool sizeCondition = (useMax ? (state.x1-state.x0 < 2) | (state.y1-state.y0 < 2) : (((state.x1-state.x0) | (state.y1-state.y0)) < 2));
                         
                         //if (state.depth >= maxDepth) {
