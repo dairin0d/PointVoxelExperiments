@@ -488,7 +488,7 @@ MonoBehaviour:
   vSyncCount: 0
   targetFrameRate: 30
   RenderSize: 0
-  depth_resolution: 16
+  depth_resolution: 24
   depth_display_shift: -1
 --- !u!1 &756631988
 GameObject:

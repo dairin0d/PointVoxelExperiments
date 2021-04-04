@@ -26,8 +26,10 @@ using UnityEngine;
 namespace dairin0d.Rendering.Octree2 {
     class Buffer {
         public struct DataItem {
+            public int stencil;
             public int depth;
             public Color32 color;
+            public int id;
         }
 
         public DataItem[] Data;
@@ -161,8 +163,10 @@ namespace dairin0d.Rendering.Octree2 {
 
         public unsafe void Clear(Color32 background, bool clearColor = true) {
             var clear_data = default(DataItem);
+            clear_data.stencil = 0;
             clear_data.depth = int.MaxValue;
             clear_data.color = background;
+            clear_data.id = -1;
 
             int w = Width;
             int h = Height;
@@ -190,6 +194,8 @@ namespace dairin0d.Rendering.Octree2 {
                                   *tile_x = clear_data;  
                                 } else {
                                     tile_x->depth = clear_data.depth;
+                                    tile_x->stencil = clear_data.stencil;
+                                    tile_x->id = clear_data.id;
                                 }
                             }
                         }
@@ -469,7 +475,7 @@ namespace dairin0d.Rendering.Octree2 {
         struct NodeState {
             public int x0, y0, x1, y1;
             public int mx0, my0, mx1, my1;
-            public int depth, pixelShift, pixelSize;
+            public int depth, pixelShift, pixelSize, z;
             public int parentOffset, readIndex, loadAddress;
         }
         
@@ -505,6 +511,8 @@ namespace dairin0d.Rendering.Octree2 {
         
         public bool UpdateCache = true;
         
+        public bool UseStencil = true;
+        
         public void UpdateWidgets(List<Widget<string>> infoWidgets, List<Widget<float>> sliderWidgets, List<Widget<bool>> toggleWidgets) {
             // infoWidgets.Add(new Widget<string>($"PixelCount={PixelCount}"));
             // infoWidgets.Add(new Widget<string>($"QuadCount={QuadCount}"));
@@ -518,6 +526,7 @@ namespace dairin0d.Rendering.Octree2 {
             sliderWidgets.Add(new Widget<float>("DrawBias", () => DrawBias, (value) => { DrawBias = value; }, 0.25f, 4f));
             sliderWidgets.Add(new Widget<float>("StencilMask", () => StencilMaskBits, (value) => { StencilMaskBits = (int)value; }, 0, 4));
 
+            toggleWidgets.Add(new Widget<bool>("Use Stencil", () => UseStencil, (value) => { UseStencil = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Map", () => UseMap, (value) => { UseMap = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Max", () => UseMaxCondition, (value) => { UseMaxCondition = value; }));
             toggleWidgets.Add(new Widget<bool>("Update Cache", () => UpdateCache, (value) => { UpdateCache = value; }));
@@ -606,7 +615,7 @@ namespace dairin0d.Rendering.Octree2 {
                 int iy = y << bufShift;
                 for (int x = 0; x < w; x++) {
                     if (((x & mask) == xValue) & ((y & mask) == yValue)) continue;
-                    buf[x|iy].depth = 1;
+                    buf[x|iy].depth = int.MinValue;
                 }
             }
         }
@@ -622,7 +631,7 @@ namespace dairin0d.Rendering.Octree2 {
             maxDepth++;
             
             Setup(in matrix, ref maxDepth, out int potShift, out int centerX, out int centerY,
-                out int boundsX0, out int boundsY0, out int boundsX1, out int boundsY1);
+                out int boundsX0, out int boundsY0, out int boundsX1, out int boundsY1, out int startZ);
             
             int forwardKey = OctantOrder.Key(in matrix);
             int reverseKey = forwardKey ^ 0b11100000000;
@@ -664,9 +673,8 @@ namespace dairin0d.Rendering.Octree2 {
             int xShift1 = xShift - 1;
             int yShift1 = yShift - 1;
             
-            int defaultZ = int.MaxValue;
-            
             int ignoreMap = (UseMap ? 0 : 0xFF);
+            int ignoreStencil = (UseStencil ? -1 : 0);
             
             bool useMax = UseMaxCondition;
             
@@ -678,6 +686,7 @@ namespace dairin0d.Rendering.Octree2 {
             curr->state.depth = 1;
             curr->state.pixelShift = potShiftDelta;
             curr->state.pixelSize = 1 << curr->state.pixelShift;
+            curr->state.z = startZ;
             curr->state.x0 = (minPX < 0 ? 0 : minPX);
             curr->state.y0 = (minPY < 0 ? 0 : minPY);
             curr->state.x1 = (maxPX >= w ? w-1 : maxPX);
@@ -690,6 +699,16 @@ namespace dairin0d.Rendering.Octree2 {
             curr->state.parentOffset = 0;
             curr->state.readIndex = readIndex;
             curr->state.loadAddress = rootNode;
+            
+            {
+                var state = curr->state;
+                for (int y = state.y0; y <= state.y1; y++) {
+                    var bufY = buf + (y << bufShift);
+                    for (int x = state.x0; x <= state.x1; x++) {
+                        bufY[x].stencil = 0;
+                    }
+                }
+            }
             
             while (curr > stack) {
                 var state = curr->state;
@@ -705,7 +724,7 @@ namespace dairin0d.Rendering.Octree2 {
                     var mapY = map + ((my >> toMapShift) << mapShift);
                     for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
                         int mask = mapY[mx >> toMapShift] & nodeMask;
-                        if (((mask|ignoreMap) != 0) & (bufY[x].depth == defaultZ)) {
+                        if (((mask|ignoreMap) != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
                             lastMY = my;
                             goto traverse;
                         }
@@ -776,6 +795,7 @@ namespace dairin0d.Rendering.Octree2 {
                         curr->state.depth = state.depth+1;
                         curr->state.pixelShift = state.pixelShift + 1;
                         curr->state.pixelSize = state.pixelSize << 1;
+                        curr->state.z = state.z + (deltas[octant].z >> state.depth);
                         curr->state.x0 = x0;
                         curr->state.y0 = y0;
                         curr->state.x1 = x1;
@@ -795,11 +815,15 @@ namespace dairin0d.Rendering.Octree2 {
                         var mapY = map + ((my >> toMapShift) << mapShift);
                         for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
                             int mask = mapY[mx >> toMapShift] & nodeMask;
-                            if ((mask != 0) & (bufY[x].depth == defaultZ)) {
+                            if ((mask != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
                                 int octant = unchecked((int)(forwardQueues[mask] & 7));
-                                var color24 = info8[octant].Color;
-                                bufY[x].color = new Color32 {r=color24.R, g=color24.G, b=color24.B, a=255};
-                                bufY[x].depth = 1;
+                                int z = state.z + (deltas[octant].z >> state.depth);
+                                if (z < bufY[x].depth) {
+                                    var color24 = info8[octant].Color;
+                                    bufY[x].color = new Color32 {r=color24.R, g=color24.G, b=color24.B, a=255};
+                                    bufY[x].depth = z;
+                                    bufY[x].stencil = 1;
+                                }
                             }
                         }
                     }
@@ -821,7 +845,7 @@ namespace dairin0d.Rendering.Octree2 {
         }
         
         unsafe void Setup(in Matrix4x4 matrix, ref int maxDepth, out int potShift, out int Cx, out int Cy,
-            out int minX, out int minY, out int maxX, out int maxY)
+            out int minX, out int minY, out int maxX, out int maxY, out int minZ)
         {
             // Shape / size distortion is less noticeable than the presence of gaps
             
@@ -895,13 +919,22 @@ namespace dairin0d.Rendering.Octree2 {
             // Baking
             octantMap.Bake(Xx, Xy, Yx, Yy, Zx, Zy, Tx, Ty, PrecisionShift);
             
+            int Xz = ((int)X.z) >> 1;
+            int Yz = ((int)Y.z) >> 1;
+            int Zz = ((int)Z.z) >> 1;
+            int extentZ = (Xz < 0 ? -Xz : Xz) + (Yz < 0 ? -Yz : Yz) + (Zz < 0 ? -Zz : Zz);
+            
+            minZ = ((int)T.z) - extentZ;
+            
             int offsetX = Tx - (half >> 1), offsetY = Ty - (half >> 1);
+            int offsetZ = extentZ;
             int octant = 0;
             for (int subZ = -1; subZ <= 1; subZ += 2) {
                 for (int subY = -1; subY <= 1; subY += 2) {
                     for (int subX = -1; subX <= 1; subX += 2) {
                         deltas[octant].x = offsetX + ((Xx * subX + Yx * subY + Zx * subZ) >> 1);
                         deltas[octant].y = offsetY + ((Xy * subX + Yy * subY + Zy * subZ) >> 1);
+                        deltas[octant].z = offsetZ + (Xz * subX + Yz * subY + Zz * subZ);
                         deltas[octant].x0 = deltas[octant].x + (minX >> 1);
                         deltas[octant].y0 = deltas[octant].y + (minY >> 1);
                         deltas[octant].x1 = deltas[octant].x + (maxX >> 1);
