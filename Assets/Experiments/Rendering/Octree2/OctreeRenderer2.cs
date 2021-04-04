@@ -508,6 +508,7 @@ namespace dairin0d.Rendering.Octree2 {
         
         public bool TestCache = false;
         public int CacheCount;
+        public bool UseLoadFunc = false;
         
         public void UpdateWidgets(List<Widget<string>> infoWidgets, List<Widget<float>> sliderWidgets, List<Widget<bool>> toggleWidgets) {
             // infoWidgets.Add(new Widget<string>($"PixelCount={PixelCount}"));
@@ -528,6 +529,7 @@ namespace dairin0d.Rendering.Octree2 {
             toggleWidgets.Add(new Widget<bool>("Use LastY", () => UseLastY, (value) => { UseLastY = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Max", () => UseMaxCondition, (value) => { UseMaxCondition = value; }));
             toggleWidgets.Add(new Widget<bool>("Test Cache", () => TestCache, (value) => { TestCache = value; }));
+            toggleWidgets.Add(new Widget<bool>("Use Load Func", () => UseLoadFunc, (value) => { UseLoadFunc = value; }));
         }
         
         public unsafe void RenderObjects(Buffer buffer, IEnumerable<(ModelInstance, Matrix4x4, int)> instances) {
@@ -584,7 +586,7 @@ namespace dairin0d.Rendering.Octree2 {
                         Render(buf, w, h, bufShift, queues, deltas, stack, map,
                             in matrix, maxDepth, node, color, nodes, colors,
                             readIndexCache, writeIndexCache, readInfoCache, writeInfoCache,
-                            readIndex, ref writeIndex);
+                            readIndex, ref writeIndex, LoadNode);
                         
                         if (writeIndex > writeIndexStart) {
                             targetCacheOffsets[cacheOffsetKey] = writeIndexStart;
@@ -618,11 +620,13 @@ namespace dairin0d.Rendering.Octree2 {
             }
         }
 
+        unsafe delegate void LoadFuncDelegate(int loadAddress, NodeInfo* info8, int* nodes, Color32* colors);
+
         unsafe void Render(Buffer.DataItem* buf, int w, int h, int bufShift,
             uint* queues, Delta* deltas, StackEntry* stack, int* map,
             in Matrix4x4 matrix, int maxDepth, int rootNode, Color32 rootColor, int* nodes, Color32* colors,
             int* readIndexCache, int* writeIndexCache, NodeInfo* readInfoCache, NodeInfo* writeInfoCache,
-            int readIndex, ref int writeIndex)
+            int readIndex, ref int writeIndex, LoadFuncDelegate loadFunc)
         {
             if (!UseRaycast) maxDepth++;
             
@@ -682,6 +686,7 @@ namespace dairin0d.Rendering.Octree2 {
             bool useMax = UseMaxCondition;
             
             bool testCache = TestCache;
+            bool useLoadFunc = UseLoadFunc;
             IndexCache8 emptyIndices = new IndexCache8 {n0=-1, n1=-1, n2=-1, n3=-1, n4=-1, n5=-1, n6=-1, n7=-1};
             
             if (!UseRaycast)
@@ -845,16 +850,20 @@ namespace dairin0d.Rendering.Octree2 {
                             *((IndexCache8*)index8) = emptyIndices;
                             
                             if (state.readIndex < 0) {
-                                // Unpack/cache the node data
-                                int offset = (state.loadAddress >> (8-3)) & (0xFFFFFF << 3);
-                                for (int octant = 0; octant < 8; octant++) {
-                                    int octantOffset = offset|octant;
-                                    var info = info8 + octant;
-                                    info->Address = nodes[octantOffset];
-                                    info->Mask = (byte)(info->Address & 0xFF);
-                                    info->Color.R = colors[octantOffset].r;
-                                    info->Color.G = colors[octantOffset].g;
-                                    info->Color.B = colors[octantOffset].b;
+                                if (useLoadFunc) {
+                                    loadFunc(state.loadAddress, info8, nodes, colors);
+                                } else {
+                                    // Unpack/cache the node data
+                                    int offset = (state.loadAddress >> (8-3)) & (0xFFFFFF << 3);
+                                    for (int octant = 0; octant < 8; octant++) {
+                                        int octantOffset = offset|octant;
+                                        var info = info8 + octant;
+                                        info->Address = nodes[octantOffset];
+                                        info->Mask = (byte)(info->Address & 0xFF);
+                                        info->Color.R = colors[octantOffset].r;
+                                        info->Color.G = colors[octantOffset].g;
+                                        info->Color.B = colors[octantOffset].b;
+                                    }
                                 }
                             } else {
                                 int _readIndex = state.readIndex >> 8;
@@ -1003,6 +1012,19 @@ namespace dairin0d.Rendering.Octree2 {
                         skip:;
                     }
                 }
+            }
+        }
+        
+        static unsafe void LoadNode(int loadAddress, NodeInfo* info8, int* nodes, Color32* colors) {
+            int offset = (loadAddress >> (8-3)) & (0xFFFFFF << 3);
+            for (int octant = 0; octant < 8; octant++) {
+                int octantOffset = offset|octant;
+                var info = info8 + octant;
+                info->Address = nodes[octantOffset];
+                info->Mask = (byte)(info->Address & 0xFF);
+                info->Color.R = colors[octantOffset].r;
+                info->Color.G = colors[octantOffset].g;
+                info->Color.B = colors[octantOffset].b;
             }
         }
         
