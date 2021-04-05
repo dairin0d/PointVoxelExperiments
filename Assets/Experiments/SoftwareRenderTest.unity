@@ -485,11 +485,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 97ef1795509756b4e8f1e741e3a56d22, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  vSyncCount: 0
-  targetFrameRate: 30
+  VSyncCount: 0
+  TargetFrameRate: 30
   RenderSize: 0
-  depth_resolution: 24
-  depth_display_shift: -1
+  DepthResolution: 24
+  DepthDisplayShift: -1
 --- !u!1 &756631988
 GameObject:
   m_ObjectHideFlags: 0

@@ -224,25 +224,25 @@ namespace dairin0d.Rendering.Octree2 {
     }
 
     public class OctreeRenderer2 : MonoBehaviour {
-        public int vSyncCount = 0;
-        public int targetFrameRate = 30;
+        public int VSyncCount = 0;
+        public int TargetFrameRate = 30;
 
         Camera cam;
         int cullingMask;
         CameraClearFlags clearFlags;
 
-        Matrix4x4 vp_matrix;
-        Plane[] frustum_planes;
+        Matrix4x4 vpMatrix;
+        Plane[] frustumPlanes;
 
         public int RenderSize = 0;
         Buffer buffer;
 
-        public int depth_resolution = 16;
+        public int DepthResolution = 16;
         Splatter splatter;
 
-        public int depth_display_shift = -1;
+        public int DepthDisplayShift = -1;
 
-        List<(float, ModelInstance)> visible_objects = new List<(float, ModelInstance)>(64);
+        List<(float, ModelInstance)> visibleObjects = new List<(float, ModelInstance)>(64);
 
         List<Widget<string>> InfoWidgets = new List<Widget<string>>(32);
         List<Widget<float>> SliderWidgets = new List<Widget<float>>(32);
@@ -263,8 +263,8 @@ namespace dairin0d.Rendering.Octree2 {
         }
 
         void Update() {
-            QualitySettings.vSyncCount = vSyncCount;
-            Application.targetFrameRate = targetFrameRate;
+            QualitySettings.vSyncCount = VSyncCount;
+            Application.targetFrameRate = TargetFrameRate;
             buffer.Resize(cam.pixelWidth, cam.pixelHeight, RenderSize);
         }
 
@@ -378,7 +378,8 @@ namespace dairin0d.Rendering.Octree2 {
 
             SliderWidgets.Clear();
             SliderWidgets.Add(new Widget<float>("RenderSize", () => RenderSize, (value) => { RenderSize = (int)value; }, 0, 640, 16));
-            SliderWidgets.Add(new Widget<float>("Target FPS", () => targetFrameRate, (value) => { targetFrameRate = (int)value; }, 20, 60, 5));
+            SliderWidgets.Add(new Widget<float>("Target FPS", () => TargetFrameRate, (value) => { TargetFrameRate = (int)value; }, 20, 60, 5));
+            SliderWidgets.Add(new Widget<float>("Depth View", () => DepthDisplayShift, (value) => { DepthDisplayShift = (int)value; }, -1, 24));
 
             ToggleWidgets.Clear();
             ToggleWidgets.Add(new Widget<bool>("Fullscreen", () => Screen.fullScreen,
@@ -396,25 +397,25 @@ namespace dairin0d.Rendering.Octree2 {
 
             float ah = cam.orthographicSize;
             float aw = (ah * w) / h;
-            vp_matrix = cam.worldToCameraMatrix;
-            vp_matrix = Matrix4x4.Scale(new Vector3(w * 0.5f / aw, h * 0.5f / ah, -1)) * vp_matrix;
-            vp_matrix = Matrix4x4.Translate(new Vector3(w * 0.5f, h * 0.5f, 0f)) * vp_matrix;
+            vpMatrix = cam.worldToCameraMatrix;
+            vpMatrix = Matrix4x4.Scale(new Vector3(w * 0.5f / aw, h * 0.5f / ah, -1)) * vpMatrix;
+            vpMatrix = Matrix4x4.Translate(new Vector3(w * 0.5f, h * 0.5f, 0f)) * vpMatrix;
 
-            frustum_planes = GeometryUtility.CalculateFrustumPlanes(cam);
+            frustumPlanes = GeometryUtility.CalculateFrustumPlanes(cam);
         }
 
         void CollectRenderers() {
-            visible_objects.Clear();
+            visibleObjects.Clear();
             
             foreach (var instance in ModelInstance.All) {
-                if (GeometryUtility.TestPlanesAABB(frustum_planes, instance.BoundingBox)) {
+                if (GeometryUtility.TestPlanesAABB(frustumPlanes, instance.BoundingBox)) {
                     var pos = instance.transform.position;
-                    float sort_z = pos.x * vp_matrix.m20 + pos.y * vp_matrix.m21 + pos.z * vp_matrix.m22;
-                    visible_objects.Add((sort_z, instance));
+                    float sort_z = pos.x * vpMatrix.m20 + pos.y * vpMatrix.m21 + pos.z * vpMatrix.m22;
+                    visibleObjects.Add((sort_z, instance));
                 }
             }
             
-            visible_objects.Sort((itemA, itemB) => {
+            visibleObjects.Sort((itemA, itemB) => {
                 return itemA.Item1.CompareTo(itemB.Item1);
             });
         }
@@ -427,17 +428,17 @@ namespace dairin0d.Rendering.Octree2 {
             
             splatter.RenderObjects(buffer, IterateInstances());
             
-            buffer.RenderEnd(depth_display_shift);
+            buffer.RenderEnd(DepthDisplayShift);
         }
         
         IEnumerable<(ModelInstance, Matrix4x4, int)> IterateInstances() {
-            float depth_scale = (1 << depth_resolution) / (cam.farClipPlane - cam.nearClipPlane);
+            float depth_scale = (1 << DepthResolution) / (cam.farClipPlane - cam.nearClipPlane);
             var depth_scale_matrix = Matrix4x4.Scale(new Vector3(1, 1, depth_scale));
             
-            foreach (var (sort_z, instance) in visible_objects) {
+            foreach (var (sort_z, instance) in visibleObjects) {
                 var voxel_scale_matrix = Matrix4x4.Scale(Vector3.one * instance.Model.Bounds.size.z); // for now
                 var obj2world = instance.transform.localToWorldMatrix * voxel_scale_matrix;
-                var mvp_matrix = vp_matrix * obj2world;
+                var mvp_matrix = vpMatrix * obj2world;
                 mvp_matrix = depth_scale_matrix * mvp_matrix;
                 yield return (instance, mvp_matrix, 0); // for now
             }
@@ -508,6 +509,7 @@ namespace dairin0d.Rendering.Octree2 {
         public bool UseMaxCondition = true;
         
         public int CacheCount;
+        public int LoadedCount;
         
         public bool UpdateCache = true;
         
@@ -520,6 +522,7 @@ namespace dairin0d.Rendering.Octree2 {
             // infoWidgets.Add(new Widget<string>($"OccludedCount={OccludedCount}"));
             // infoWidgets.Add(new Widget<string>($"NodeCount={NodeCount}"));
             infoWidgets.Add(new Widget<string>($"CacheCount={CacheCount}"));
+            infoWidgets.Add(new Widget<string>($"LoadedCount={LoadedCount}"));
 
             sliderWidgets.Add(new Widget<float>("Level", () => MaxLevel, (value) => { MaxLevel = (int)value; }, 0, 16));
             sliderWidgets.Add(new Widget<float>("MapShift", () => MapShift, (value) => { MapShift = (int)value; }, OctantMap.MinShift, OctantMap.MaxShift));
@@ -540,6 +543,7 @@ namespace dairin0d.Rendering.Octree2 {
             // NodeCount = 0;
 
             CacheCount = 0;
+            LoadedCount = 0;
             targetCacheOffsets.Clear();
             // The zeroth element is used for "writing cached parent reference" of root nodes
             // (the value is not used, this just avoids extra checks)
@@ -673,6 +677,7 @@ namespace dairin0d.Rendering.Octree2 {
             int xShift1 = xShift - 1;
             int yShift1 = yShift - 1;
             
+            bool useMap = UseMap;
             int ignoreMap = (UseMap ? 0 : 0xFF);
             int ignoreStencil = (UseStencil ? -1 : 0);
             
@@ -719,14 +724,26 @@ namespace dairin0d.Rendering.Octree2 {
                 int lastMY = state.my0;
                 
                 // Occlusion test
-                for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
-                    var bufY = buf + (y << bufShift);
-                    var mapY = map + ((my >> toMapShift) << mapShift);
-                    for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
-                        int mask = mapY[mx >> toMapShift] & nodeMask;
-                        if (((mask|ignoreMap) != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
-                            lastMY = my;
-                            goto traverse;
+                if (useMap) {
+                    for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
+                        var bufY = buf + (y << bufShift);
+                        var mapY = map + ((my >> toMapShift) << mapShift);
+                        for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
+                            int mask = mapY[mx >> toMapShift] & nodeMask;
+                            if ((mask != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
+                                lastMY = my;
+                                goto traverse;
+                            }
+                        }
+                    }
+                } else {
+                    for (int y = state.y0; y <= state.y1; y++) {
+                        var bufY = buf + (y << bufShift);
+                        for (int x = state.x0; x <= state.x1; x++) {
+                            if ((state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
+                                lastMY += (y - state.y0) << state.pixelShift;
+                                goto traverse;
+                            }
                         }
                     }
                 }
@@ -747,6 +764,7 @@ namespace dairin0d.Rendering.Octree2 {
                 
                 if (state.readIndex < 0) {
                     loadFunc(state.loadAddress, info8, nodes, colors);
+                    LoadedCount++;
                 } else {
                     int _readIndex = state.readIndex >> 8;
                     index8read = readIndexCache + (_readIndex << 3);
