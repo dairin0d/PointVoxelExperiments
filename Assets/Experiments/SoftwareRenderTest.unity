@@ -312,7 +312,7 @@ MonoBehaviour:
   x: 0
   y: 0
   orthoSize0: 0
-  pixel_scale: 1
+  pixel_scale: 0.01
   angle_snap_x: -1
   angle_snap_y: -1
 --- !u!81 &235244861
@@ -490,6 +490,7 @@ MonoBehaviour:
   RenderSize: 0
   DepthResolution: 24
   DepthDisplayShift: -1
+  Controller: {fileID: 756631990}
 --- !u!1 &756631988
 GameObject:
   m_ObjectHideFlags: 0

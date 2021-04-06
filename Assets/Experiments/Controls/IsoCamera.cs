@@ -43,7 +43,7 @@ namespace dairin0d.Controls {
 		public float y = 0f;
 		public float orthoSize0 = 0f;
 				
-		public int pixel_scale = 1;
+		public float pixel_scale = 1;
 		public float angle_snap_x = -1f;
 		public float angle_snap_y = -1f;
 

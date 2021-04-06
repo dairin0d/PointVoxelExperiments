@@ -46,6 +46,9 @@ namespace dairin0d.Rendering.Octree2 {
         public int TileSize => 1 << TileShift;
         public int TileCount => TileCountX * TileCountY;
 
+        public bool Subsample = false;
+        private bool wasSubsample = false;
+
         private System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
         public float FrameTime {get; private set;}
 
@@ -72,17 +75,24 @@ namespace dairin0d.Rendering.Octree2 {
             tilePow = Mathf.Clamp(tilePow, 0, 12);
             int tileSize = (tilePow <= 0 ? 0 : 1 << (tilePow - 1));
 
-            if (Texture && (w == Texture.width) && (h == Texture.height)) {
+            if (Texture && (w == Width) && (h == Height) && (wasSubsample == Subsample)) {
                 if (tileSize != TileSize) Resize(w, h, tileSize);
                 return;
             }
 
             if (Texture) UnityEngine.Object.Destroy(Texture);
 
-            Texture = new Texture2D(w, h, TextureFormat.RGBA32, false);
+            int w2 = w, h2 = h;
+            if (Subsample) {
+                w2 *= 2;
+                h2 *= 2;
+            }
+            wasSubsample = Subsample;
+
+            Texture = new Texture2D(w2, h2, TextureFormat.RGBA32, false);
             Texture.filterMode = FilterMode.Point;
 
-            colors = new Color32[w * h];
+            colors = new Color32[w2 * h2];
 
             Resize(w, h, tileSize);
         }
@@ -118,8 +128,8 @@ namespace dairin0d.Rendering.Octree2 {
         }
         
         public unsafe void Blit(int depth_shift = -1) {
-            int w = Texture.width;
-            int h = Texture.height;
+            int w = Width;
+            int h = Height;
             int shift = TileShift;
             int shift2 = shift * 2;
             int tile_size = 1 << shift;
@@ -129,35 +139,76 @@ namespace dairin0d.Rendering.Octree2 {
 
             bool show_depth = (depth_shift >= 0);
 
-            fixed (DataItem* data_ptr = Data)
-            fixed (Color32* colors_ptr = colors) {
-                for (int ty = 0; ty < tny; ++ty) {
-                    int iy = ty << shift;
-                    var colors_ty = colors_ptr + iy * w;
-                    int th = h - iy; if (th > tile_size) th = tile_size;
-                    for (int tx = 0; tx < tnx; ++tx) {
-                        int ix = tx << shift;
-                        var colors_tx = colors_ty + ix;
-                        int tw = w - ix; if (tw > tile_size) tw = tile_size;
+            int w2 = Texture.width, h2 = Texture.height;
+            int x2step = 1, y2step = 1;
+            int x2start = 0, y2start = 0;
+            
+            bool useSubsample = Subsample;
+            if (Subsample) {
+                x2step *= 2;
+                y2step *= 2;
+                Subsampler.Get(out x2start, out y2start);
+            }
 
-                        var tile = data_ptr + ((tx + ty * tnx) << shift2);
-                        var tile_end_y = tile + (th << shift);
-                        var colors_y = colors_tx;
-                        for (var tile_y = tile; tile_y != tile_end_y; tile_y += tile_size, colors_y += w) {
-                            var tile_end_x = tile_y + tw;
-                            var colors_x = colors_y;
-                            for (var tile_x = tile_y; tile_x != tile_end_x; ++tile_x, ++colors_x) {
-                                if (show_depth) {
-                                    byte d = (byte)(tile_x->depth >> depth_shift);
-                                    colors_x->r = colors_x->g = colors_x->b = d;
-                                    colors_x->a = tile_x->color.a;
-                                } else {
-                                    *colors_x = tile_x->color;
+            fixed (DataItem* data_ptr = Data)
+            fixed (Color32* colors_ptr = colors)
+            {
+                for (int y = 0, y2 = y2start; y < h; y++, y2 += y2step) {
+                    var data_ptr_y = data_ptr + y * tile_size;
+                    var colors_ptr_y = colors_ptr + y2 * w2;
+                    for (int x = 0, x2 = x2start; x < w; x++, x2 += x2step) {
+                        var data_x = data_ptr_y + x;
+                        var colors_x = colors_ptr_y + x2;
+                        if (show_depth) {
+                            byte d = (byte)(data_x->depth >> depth_shift);
+                            colors_x->r = colors_x->g = colors_x->b = d;
+                            colors_x->a = data_x->color.a;
+                        } else {
+                            *colors_x = data_x->color;
+                        }
+                        
+                        if (useSubsample) {
+                            for (int subY = 0; subY < 2; subY++) {
+                                var colors_sub_y = colors_ptr + (y2-y2start+subY) * w2;
+                                for (int subX = 0; subX < 2; subX++) {
+                                    if ((subX == x2start) & (subY == y2start)) continue;
+                                    var colors_sub_x = colors_sub_y + (x2-x2start+subX);
+                                    colors_sub_x->r = (byte)((colors_sub_x->r*3 + colors_x->r + 3) >> 2);
+                                    colors_sub_x->g = (byte)((colors_sub_x->g*3 + colors_x->g + 3) >> 2);
+                                    colors_sub_x->b = (byte)((colors_sub_x->b*3 + colors_x->b + 3) >> 2);
                                 }
                             }
                         }
                     }
                 }
+                
+                // for (int ty = 0; ty < tny; ++ty) {
+                //     int iy = ty << shift;
+                //     var colors_ty = colors_ptr + iy * w;
+                //     int th = h - iy; if (th > tile_size) th = tile_size;
+                //     for (int tx = 0; tx < tnx; ++tx) {
+                //         int ix = tx << shift;
+                //         var colors_tx = colors_ty + ix;
+                //         int tw = w - ix; if (tw > tile_size) tw = tile_size;
+
+                //         var tile = data_ptr + ((tx + ty * tnx) << shift2);
+                //         var tile_end_y = tile + (th << shift);
+                //         var colors_y = colors_tx;
+                //         for (var tile_y = tile; tile_y != tile_end_y; tile_y += tile_size, colors_y += w) {
+                //             var tile_end_x = tile_y + tw;
+                //             var colors_x = colors_y;
+                //             for (var tile_x = tile_y; tile_x != tile_end_x; ++tile_x, ++colors_x) {
+                //                 if (show_depth) {
+                //                     byte d = (byte)(tile_x->depth >> depth_shift);
+                //                     colors_x->r = colors_x->g = colors_x->b = d;
+                //                     colors_x->a = tile_x->color.a;
+                //                 } else {
+                //                     *colors_x = tile_x->color;
+                //                 }
+                //             }
+                //         }
+                //     }
+                // }
             }
         }
 
@@ -249,6 +300,8 @@ namespace dairin0d.Rendering.Octree2 {
         List<Widget<bool>> ToggleWidgets = new List<Widget<bool>>(32);
 
         Material mat;
+
+        public dairin0d.Controls.PlayerController Controller;
 
         // ========== Unity events ========== //
 
@@ -381,9 +434,14 @@ namespace dairin0d.Rendering.Octree2 {
             SliderWidgets.Add(new Widget<float>("Target FPS", () => TargetFrameRate, (value) => { TargetFrameRate = (int)value; }, 20, 60, 5));
             SliderWidgets.Add(new Widget<float>("Depth View", () => DepthDisplayShift, (value) => { DepthDisplayShift = (int)value; }, -1, 24));
 
+            if (Controller) {
+                SliderWidgets.Add(new Widget<float>("Move Speed", () => Controller.speed, (value) => { Controller.speed = value; }, 0.01f, 0.5f));
+            }
+
             ToggleWidgets.Clear();
             ToggleWidgets.Add(new Widget<bool>("Fullscreen", () => Screen.fullScreen,
                 (value) => { if (Screen.fullScreen != value) Screen.fullScreen = value; }));
+            ToggleWidgets.Add(new Widget<bool>("Subsample", () => buffer.Subsample, (value) => { buffer.Subsample = value; }));
 
             splatter.UpdateWidgets(InfoWidgets, SliderWidgets, ToggleWidgets);
         }
@@ -424,7 +482,7 @@ namespace dairin0d.Rendering.Octree2 {
             UpdateCameraInfo();
             CollectRenderers();
 
-            buffer.RenderStart(cam.backgroundColor, splatter.StencilMaskBits == 0);
+            buffer.RenderStart(cam.backgroundColor);
             
             splatter.RenderObjects(buffer, IterateInstances());
             
@@ -455,6 +513,18 @@ namespace dairin0d.Rendering.Octree2 {
         public byte R, G, B; // Alpha isn't used in splatting anyway
     }
     
+    static class Subsampler {
+        public static void Get(out int x, out int y) {
+            switch (Time.frameCount & 0b11) {
+                case 0: x = 0; y = 0; return;
+                case 1: x = 1; y = 1; return;
+                case 2: x = 1; y = 0; return;
+                case 3: x = 0; y = 1; return;
+            }
+            x = 0; y = 0;
+        }
+    }
+    
     class Splatter {
         const int PrecisionShift = 30;
         const int PrecisionMask = ((1 << PrecisionShift) - 1);
@@ -478,6 +548,7 @@ namespace dairin0d.Rendering.Octree2 {
             public int mx0, my0, mx1, my1;
             public int depth, pixelShift, pixelSize, z;
             public int parentOffset, readIndex, loadAddress;
+            public Color24 color;
         }
         
         // These are used for faster copying
@@ -488,12 +559,36 @@ namespace dairin0d.Rendering.Octree2 {
             public NodeInfo n0, n1, n2, n3, n4, n5, n6, n7;
         }
         
-        int[] indexCache0 = new int[4*8*1024*1024];
-        int[] indexCache1 = new int[4*8*1024*1024];
-        NodeInfo[] infoCache0 = new NodeInfo[4*8*1024*1024];
-        NodeInfo[] infoCache1 = new NodeInfo[4*8*1024*1024];
-        Dictionary<(ModelInstance, int, int), int> sourceCacheOffsets = new Dictionary<(ModelInstance, int, int), int>();
-        Dictionary<(ModelInstance, int, int), int> targetCacheOffsets = new Dictionary<(ModelInstance, int, int), int>();
+        class NodeCache {
+            public int[] indexCache0;
+            public int[] indexCache1;
+            public NodeInfo[] infoCache0;
+            public NodeInfo[] infoCache1;
+            public Dictionary<(ModelInstance, int, int), int> sourceCacheOffsets = new Dictionary<(ModelInstance, int, int), int>();
+            public Dictionary<(ModelInstance, int, int), int> targetCacheOffsets = new Dictionary<(ModelInstance, int, int), int>();
+            
+            public NodeCache(int count) {
+                int size = count * 8;
+                indexCache0 = new int[size];
+                indexCache1 = new int[size];
+                infoCache0 = new NodeInfo[size];
+                infoCache1 = new NodeInfo[size];
+            }
+            
+            public void Swap() {
+                (indexCache0, indexCache1) = (indexCache1, indexCache0);
+                (infoCache0, infoCache1) = (infoCache1, infoCache0);
+                (sourceCacheOffsets, targetCacheOffsets) = (targetCacheOffsets, sourceCacheOffsets);
+            }
+        }
+        const int CacheStorageCount = 2*1024*1024;
+        NodeCache[] caches = new NodeCache[] {
+            new NodeCache(CacheStorageCount),
+            new NodeCache(CacheStorageCount),
+            new NodeCache(CacheStorageCount),
+            new NodeCache(CacheStorageCount),
+        };
+        int currentCacheIndex = 0;
         
         public int MapShift = 5;
         OctantMap octantMap = new OctantMap();
@@ -501,8 +596,6 @@ namespace dairin0d.Rendering.Octree2 {
         public int MaxLevel = 0;
         
         public float DrawBias = 1;
-        
-        public int StencilMaskBits = 0;
         
         public bool UseMap = true;
         
@@ -514,6 +607,12 @@ namespace dairin0d.Rendering.Octree2 {
         public bool UpdateCache = true;
         
         public bool UseStencil = true;
+        
+        public int SplatAt = 2;
+        
+        public int BlendFactor = 0;
+        
+        bool useSubsample;
         
         public void UpdateWidgets(List<Widget<string>> infoWidgets, List<Widget<float>> sliderWidgets, List<Widget<bool>> toggleWidgets) {
             // infoWidgets.Add(new Widget<string>($"PixelCount={PixelCount}"));
@@ -527,7 +626,8 @@ namespace dairin0d.Rendering.Octree2 {
             sliderWidgets.Add(new Widget<float>("Level", () => MaxLevel, (value) => { MaxLevel = (int)value; }, 0, 16));
             sliderWidgets.Add(new Widget<float>("MapShift", () => MapShift, (value) => { MapShift = (int)value; }, OctantMap.MinShift, OctantMap.MaxShift));
             sliderWidgets.Add(new Widget<float>("DrawBias", () => DrawBias, (value) => { DrawBias = value; }, 0.25f, 4f));
-            sliderWidgets.Add(new Widget<float>("StencilMask", () => StencilMaskBits, (value) => { StencilMaskBits = (int)value; }, 0, 4));
+            sliderWidgets.Add(new Widget<float>("Splat At", () => SplatAt, (value) => { SplatAt = (int)value; }, 1, 8));
+            sliderWidgets.Add(new Widget<float>("BlendFactor", () => BlendFactor, (value) => { BlendFactor = (int)value; }, 0, 255));
 
             toggleWidgets.Add(new Widget<bool>("Use Stencil", () => UseStencil, (value) => { UseStencil = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Map", () => UseMap, (value) => { UseMap = value; }));
@@ -541,10 +641,17 @@ namespace dairin0d.Rendering.Octree2 {
             // CulledCount = 0;
             // OccludedCount = 0;
             // NodeCount = 0;
+            
+            useSubsample = buffer.Subsample;
+            if (useSubsample) {
+                int frame = Time.frameCount;
+                currentCacheIndex = frame & 0b11;
+            }
+            var cache = caches[currentCacheIndex];
 
             CacheCount = 0;
             LoadedCount = 0;
-            targetCacheOffsets.Clear();
+            cache.targetCacheOffsets.Clear();
             // The zeroth element is used for "writing cached parent reference" of root nodes
             // (the value is not used, this just avoids extra checks)
             int writeIndex = 2;
@@ -557,13 +664,11 @@ namespace dairin0d.Rendering.Octree2 {
             fixed (Delta* deltas = this.deltas)
             fixed (StackEntry* stack = this.stack)
             fixed (int* map = octantMap.Data)
-            fixed (int* readIndexCache = indexCache0)
-            fixed (int* writeIndexCache = indexCache1)
-            fixed (NodeInfo* readInfoCache = infoCache0)
-            fixed (NodeInfo* writeInfoCache = infoCache1)
+            fixed (int* readIndexCache = cache.indexCache0)
+            fixed (int* writeIndexCache = cache.indexCache1)
+            fixed (NodeInfo* readInfoCache = cache.infoCache0)
+            fixed (NodeInfo* writeInfoCache = cache.infoCache1)
             {
-                MaskDepth(buf, w, h, bufShift);
-
                 foreach (var (instance, matrix, partIndex) in instances) {
                     var model = instance.Model;
                     var part = model.Parts[partIndex];
@@ -581,7 +686,7 @@ namespace dairin0d.Rendering.Octree2 {
                         
                         int writeIndexStart = writeIndex;
                         
-                        if (!sourceCacheOffsets.TryGetValue(cacheOffsetKey, out var readIndex)) {
+                        if (!cache.sourceCacheOffsets.TryGetValue(cacheOffsetKey, out var readIndex)) {
                             readIndex = -1;
                         }
                         
@@ -593,7 +698,7 @@ namespace dairin0d.Rendering.Octree2 {
                             readIndex, ref writeIndex, LoadNode);
                         
                         if (writeIndex > writeIndexStart) {
-                            targetCacheOffsets[cacheOffsetKey] = writeIndexStart;
+                            cache.targetCacheOffsets[cacheOffsetKey] = writeIndexStart;
                         }
                     }
                 }
@@ -601,27 +706,7 @@ namespace dairin0d.Rendering.Octree2 {
             
             CacheCount = writeIndex;
             
-            (indexCache0, indexCache1) = (indexCache1, indexCache0);
-            (infoCache0, infoCache1) = (infoCache1, infoCache0);
-            (sourceCacheOffsets, targetCacheOffsets) = (targetCacheOffsets, sourceCacheOffsets);
-        }
-
-        unsafe void MaskDepth(Buffer.DataItem* buf, int w, int h, int bufShift) {
-            if (StencilMaskBits <= 0) return;
-            
-            int bits = StencilMaskBits;
-            int mask = (1 << bits) - 1;
-            int frame = Time.frameCount;
-            int xValue = frame & mask;
-            int yValue = (frame >> bits) & mask;
-            
-            for (int y = 0; y < h; y++) {
-                int iy = y << bufShift;
-                for (int x = 0; x < w; x++) {
-                    if (((x & mask) == xValue) & ((y & mask) == yValue)) continue;
-                    buf[x|iy].depth = int.MinValue;
-                }
-            }
+            cache.Swap();
         }
 
         unsafe delegate void LoadFuncDelegate(int loadAddress, NodeInfo* info8, int* nodes, Color32* colors);
@@ -681,6 +766,11 @@ namespace dairin0d.Rendering.Octree2 {
             int ignoreMap = (UseMap ? 0 : 0xFF);
             int ignoreStencil = (UseStencil ? -1 : 0);
             
+            int splatAt = SplatAt;
+            
+            int blendFactor = BlendFactor;
+            int blendFactorInv = 255 - blendFactor;
+            
             bool useMax = UseMaxCondition;
             
             bool updateCache = UpdateCache;
@@ -704,6 +794,7 @@ namespace dairin0d.Rendering.Octree2 {
             curr->state.parentOffset = 0;
             curr->state.readIndex = readIndex;
             curr->state.loadAddress = rootNode;
+            curr->state.color = new Color24 {R=rootColor.r, G=rootColor.g, B=rootColor.b};
             
             {
                 var state = curr->state;
@@ -775,7 +866,9 @@ namespace dairin0d.Rendering.Octree2 {
                 
                 ///////////////////////////////////////////
                 
-                bool sizeCondition = (useMax ? (state.x1-state.x0 < 2) | (state.y1-state.y0 < 2) : (((state.x1-state.x0) | (state.y1-state.y0)) < 2));
+                bool sizeCondition = (useMax
+                    ? (state.x1-state.x0 < splatAt) | (state.y1-state.y0 < splatAt)
+                    : (state.x1-state.x0 < splatAt) & (state.y1-state.y0 < splatAt));
                 bool shouldDraw = (state.depth >= maxDepth) | sizeCondition;
                 shouldDraw |= !updateCache & (state.readIndex < 0);
                 
@@ -826,6 +919,7 @@ namespace dairin0d.Rendering.Octree2 {
                         curr->state.parentOffset = parentOffset | octant;
                         curr->state.readIndex = (index8read[octant] << 8) | info8[octant].Mask;
                         curr->state.loadAddress = info8[octant].Address;
+                        curr->state.color = info8[octant].Color;
                     }
                 } else {
                     for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
@@ -838,7 +932,15 @@ namespace dairin0d.Rendering.Octree2 {
                                 int z = state.z + (deltas[octant].z >> state.depth);
                                 if (z < bufY[x].depth) {
                                     var color24 = info8[octant].Color;
-                                    bufY[x].color = new Color32 {r=color24.R, g=color24.G, b=color24.B, a=255};
+                                    bufY[x].color = new Color32 {
+                                        // r = color24.R,
+                                        // g = color24.G,
+                                        // b = color24.B,
+                                        r = (byte)((color24.R * blendFactorInv + state.color.R * blendFactor + 255) >> 8),
+                                        g = (byte)((color24.G * blendFactorInv + state.color.G * blendFactor + 255) >> 8),
+                                        b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
+                                        a = 255
+                                    };
                                     bufY[x].depth = z;
                                     bufY[x].stencil = 1;
                                 }
@@ -871,6 +973,14 @@ namespace dairin0d.Rendering.Octree2 {
             var Y = new Vector3 {x = matrix.m01, y = matrix.m11, z = matrix.m21};
             var Z = new Vector3 {x = matrix.m02, y = matrix.m12, z = matrix.m22};
             var T = new Vector3 {x = matrix.m03, y = matrix.m13, z = matrix.m23};
+            
+            ///////////////////////////////////////
+            if (useSubsample) {
+                Subsampler.Get(out int subsampleX, out int subsampleY);
+                T.x -= (subsampleX - 0.5f) * 0.5f;
+                T.y -= (subsampleY - 0.5f) * 0.5f;
+            }
+            ///////////////////////////////////////
             
             var XN = ((Vector2)X).normalized;
             var YN = ((Vector2)Y).normalized;
@@ -924,12 +1034,20 @@ namespace dairin0d.Rendering.Octree2 {
             maxX = Tx + extentX;
             maxY = Ty + extentY;
             
+            float extentXYx = (X.x < 0 ? -X.x : X.x) + (Y.x < 0 ? -Y.x : Y.x);
+            float extentXYy = (X.y < 0 ? -X.y : X.y) + (Y.y < 0 ? -Y.y : Y.y);
+            float extentYZx = (Y.x < 0 ? -Y.x : Y.x) + (Z.x < 0 ? -Z.x : Z.x);
+            float extentYZy = (Y.y < 0 ? -Y.y : Y.y) + (Z.y < 0 ? -Z.y : Z.y);
+            float extentZXx = (Z.x < 0 ? -Z.x : Z.x) + (X.x < 0 ? -X.x : X.x);
+            float extentZXy = (Z.y < 0 ? -Z.y : Z.y) + (X.y < 0 ? -X.y : X.y);
+            
             // int maxSize = 1 + 2 * (extentX > extentY ? extentX : extentY);
             // int drawDepth = 1;
             // while ((1 << (potShiftDelta + drawDepth)) < maxSize) drawDepth++;
             // if (maxDepth > drawDepth) maxDepth = drawDepth;
             
-            float maxSize = 2 * (extentXf > extentYf ? extentXf : extentYf) * DrawBias;
+            // float maxSize = 2 * (extentXf > extentYf ? extentXf : extentYf) * DrawBias;
+            float maxSize = 2 * Mathf.Max(extentXYx, extentXYy, extentYZx, extentYZy, extentZXx, extentZXy) * DrawBias;
             int drawDepth = 1;
             while ((1 << drawDepth) < maxSize) drawDepth++;
             if (maxDepth > drawDepth) maxDepth = drawDepth;
