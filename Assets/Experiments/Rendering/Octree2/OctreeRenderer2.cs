@@ -138,6 +138,8 @@ namespace dairin0d.Rendering.Octree2 {
             int tny = TileCountY;
 
             bool show_depth = (depth_shift >= 0);
+            bool show_complexity = (depth_shift < -1);
+            int complexity_shift = -1 - depth_shift;
 
             int w2 = Texture.width, h2 = Texture.height;
             int x2step = 1, y2step = 1;
@@ -163,6 +165,10 @@ namespace dairin0d.Rendering.Octree2 {
                             byte d = (byte)(data_x->depth >> depth_shift);
                             colors_x->r = colors_x->g = colors_x->b = d;
                             colors_x->a = data_x->color.a;
+                        } else if (show_complexity) {
+                            byte d = (byte)(data_x->id << complexity_shift);
+                            colors_x->r = colors_x->g = colors_x->b = d;
+                            colors_x->a = data_x->color.a;
                         } else {
                             *colors_x = data_x->color;
                         }
@@ -181,34 +187,6 @@ namespace dairin0d.Rendering.Octree2 {
                         }
                     }
                 }
-                
-                // for (int ty = 0; ty < tny; ++ty) {
-                //     int iy = ty << shift;
-                //     var colors_ty = colors_ptr + iy * w;
-                //     int th = h - iy; if (th > tile_size) th = tile_size;
-                //     for (int tx = 0; tx < tnx; ++tx) {
-                //         int ix = tx << shift;
-                //         var colors_tx = colors_ty + ix;
-                //         int tw = w - ix; if (tw > tile_size) tw = tile_size;
-
-                //         var tile = data_ptr + ((tx + ty * tnx) << shift2);
-                //         var tile_end_y = tile + (th << shift);
-                //         var colors_y = colors_tx;
-                //         for (var tile_y = tile; tile_y != tile_end_y; tile_y += tile_size, colors_y += w) {
-                //             var tile_end_x = tile_y + tw;
-                //             var colors_x = colors_y;
-                //             for (var tile_x = tile_y; tile_x != tile_end_x; ++tile_x, ++colors_x) {
-                //                 if (show_depth) {
-                //                     byte d = (byte)(tile_x->depth >> depth_shift);
-                //                     colors_x->r = colors_x->g = colors_x->b = d;
-                //                     colors_x->a = tile_x->color.a;
-                //                 } else {
-                //                     *colors_x = tile_x->color;
-                //                 }
-                //             }
-                //         }
-                //     }
-                // }
             }
         }
 
@@ -217,7 +195,7 @@ namespace dairin0d.Rendering.Octree2 {
             clear_data.stencil = 0;
             clear_data.depth = int.MaxValue;
             clear_data.color = background;
-            clear_data.id = -1;
+            clear_data.id = 0;
 
             int w = Width;
             int h = Height;
@@ -228,27 +206,18 @@ namespace dairin0d.Rendering.Octree2 {
             int tnx = TileCountX;
             int tny = TileCountY;
 
-            fixed (DataItem* data_ptr = Data) {
-                for (int ty = 0; ty < tny; ++ty) {
-                    int iy = ty << shift;
-                    int th = h - iy; if (th > tile_size) th = tile_size;
-                    for (int tx = 0; tx < tnx; ++tx) {
-                        int ix = tx << shift;
-                        int tw = w - ix; if (tw > tile_size) tw = tile_size;
-
-                        var tile = data_ptr + ((tx + ty * tnx) << shift2);
-                        var tile_end_y = tile + (th << shift);
-                        for (var tile_y = tile; tile_y != tile_end_y; tile_y += tile_size) {
-                            var tile_end_x = tile_y + tw;
-                            for (var tile_x = tile_y; tile_x != tile_end_x; ++tile_x) {
-                                if (clearColor) {
-                                  *tile_x = clear_data;  
-                                } else {
-                                    tile_x->depth = clear_data.depth;
-                                    tile_x->stencil = clear_data.stencil;
-                                    tile_x->id = clear_data.id;
-                                }
-                            }
+            fixed (DataItem* data_ptr = Data)
+            {
+                for (int y = 0; y < h; y++) {
+                    var data_ptr_y = data_ptr + y * tile_size;
+                    for (int x = 0; x < w; x++) {
+                        var data_x = data_ptr_y + x;
+                        if (clearColor) {
+                            *data_x = clear_data;
+                        } else {
+                            data_x->depth = clear_data.depth;
+                            data_x->stencil = clear_data.stencil;
+                            data_x->id = clear_data.id;
                         }
                     }
                 }
@@ -432,7 +401,7 @@ namespace dairin0d.Rendering.Octree2 {
             SliderWidgets.Clear();
             SliderWidgets.Add(new Widget<float>("RenderSize", () => RenderSize, (value) => { RenderSize = (int)value; }, 0, 640, 16));
             SliderWidgets.Add(new Widget<float>("Target FPS", () => TargetFrameRate, (value) => { TargetFrameRate = (int)value; }, 20, 60, 5));
-            SliderWidgets.Add(new Widget<float>("Depth View", () => DepthDisplayShift, (value) => { DepthDisplayShift = (int)value; }, -1, 24));
+            SliderWidgets.Add(new Widget<float>("Depth View", () => DepthDisplayShift, (value) => { DepthDisplayShift = (int)value; }, -8, 24));
 
             if (Controller) {
                 SliderWidgets.Add(new Widget<float>("Move Speed", () => Controller.speed, (value) => { Controller.speed = value; }, 0.01f, 0.5f));
@@ -821,6 +790,7 @@ namespace dairin0d.Rendering.Octree2 {
                         var mapY = map + ((my >> toMapShift) << mapShift);
                         for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
                             int mask = mapY[mx >> toMapShift] & nodeMask;
+                            bufY[x].id += 1;
                             if ((mask != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
                                 lastMY = my;
                                 goto traverse;
@@ -831,6 +801,7 @@ namespace dairin0d.Rendering.Octree2 {
                     for (int y = state.y0; y <= state.y1; y++) {
                         var bufY = buf + (y << bufShift);
                         for (int x = state.x0; x <= state.x1; x++) {
+                            bufY[x].id += 1;
                             if ((state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
                                 lastMY += (y - state.y0) << state.pixelShift;
                                 goto traverse;
@@ -930,6 +901,7 @@ namespace dairin0d.Rendering.Octree2 {
                             if ((mask != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
                                 int octant = unchecked((int)(forwardQueues[mask] & 7));
                                 int z = state.z + (deltas[octant].z >> state.depth);
+                                bufY[x].id += 1;
                                 if (z < bufY[x].depth) {
                                     var color24 = info8[octant].Color;
                                     bufY[x].color = new Color32 {
