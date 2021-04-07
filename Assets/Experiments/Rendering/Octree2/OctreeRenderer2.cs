@@ -911,8 +911,8 @@ namespace dairin0d.Rendering.Octree2 {
                         curr->state.y0 = y0;
                         curr->state.x1 = x1;
                         curr->state.y1 = y1;
-                        curr->state.mx0 = (state.mx0 + (dx0 << state.pixelShift) - deltas[octant].x) << 1;
-                        curr->state.my0 = (state.my0 + (dy0 << state.pixelShift) - deltas[octant].y) << 1;
+                        curr->state.mx0 = ((state.mx0 + (dx0 << state.pixelShift) - deltas[octant].x) << 1) + 1;
+                        curr->state.my0 = ((state.my0 + (dy0 << state.pixelShift) - deltas[octant].y) << 1) + 1;
                         curr->state.mx1 = curr->state.mx0 + ((x1 - x0) << curr->state.pixelShift);
                         curr->state.my1 = curr->state.my0 + ((y1 - y0) << curr->state.pixelShift);
                         
