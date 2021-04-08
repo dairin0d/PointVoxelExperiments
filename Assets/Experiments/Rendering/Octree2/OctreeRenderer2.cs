@@ -634,9 +634,9 @@ namespace dairin0d.Rendering.Octree2 {
             fixed (uint* queues = OctantOrder.Queues)
             fixed (Delta* deltas = this.deltas)
             fixed (StackEntry* stack = this.stack)
-            fixed (int* map = octantMap.Data)
-            fixed (int* xmap = octantMap.DataX)
-            fixed (int* ymap = octantMap.DataY)
+            fixed (byte* map = octantMap.Data)
+            fixed (byte* xmap = octantMap.DataX)
+            fixed (byte* ymap = octantMap.DataY)
             fixed (int* readIndexCache = cache.indexCache0)
             fixed (int* writeIndexCache = cache.indexCache1)
             fixed (NodeInfo* readInfoCache = cache.infoCache0)
@@ -685,7 +685,7 @@ namespace dairin0d.Rendering.Octree2 {
         unsafe delegate void LoadFuncDelegate(int loadAddress, NodeInfo* info8, int* nodes, Color32* colors);
 
         unsafe void Render(Buffer.DataItem* buf, int w, int h, int bufShift,
-            uint* queues, Delta* deltas, StackEntry* stack, int* map, int* xmap, int* ymap,
+            uint* queues, Delta* deltas, StackEntry* stack, byte* map, byte* xmap, byte* ymap,
             in Matrix4x4 matrix, int maxDepth, int rootNode, Color32 rootColor, int* nodes, Color32* colors,
             int* readIndexCache, int* writeIndexCache, NodeInfo* readInfoCache, NodeInfo* writeInfoCache,
             int readIndex, ref int writeIndex, LoadFuncDelegate loadFunc)

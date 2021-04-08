@@ -32,12 +32,12 @@ namespace dairin0d.Rendering {
 		// Just to be sure, use slightly lower precision
 		public const int PrecisionShift = 15;
 		
-		private int[] data;
-		public int[] Data => data;
+		private byte[] data;
+		public byte[] Data => data;
 		
-		private int[] dataX, dataY;
-		public int[] DataX => dataX;
-		public int[] DataY => dataY;
+		private byte[] dataX, dataY;
+		public byte[] DataX => dataX;
+		public byte[] DataY => dataY;
 		
 		public int SizeShift { get; private set; }
 		public int Size => 1 << SizeShift;
@@ -47,10 +47,10 @@ namespace dairin0d.Rendering {
 			if (sizeShift == SizeShift) return;
 			
 			SizeShift = sizeShift;
-			data = new int[Size * Size];
+			data = new byte[Size * Size];
 			
-			dataX = new int[Size];
-			dataY = new int[Size];
+			dataX = new byte[Size];
+			dataY = new byte[Size];
 		}
 		
 		// The input vectors are relative to a box of (1 << shift) size
@@ -129,7 +129,7 @@ namespace dairin0d.Rendering {
 						int dotYr = Yx*offset_y - Yy*offset_x;
 						int dotZr = Zx*offset_y - Zy*offset_x;
 						
-						int mask = 1 << octant;
+						byte mask = (byte)(1 << octant);
 						
 						for (int iy = ymin; iy < ymax; ++iy) {
 							int ixy0 = (iy << sizeShift) + xmin;
@@ -180,7 +180,7 @@ namespace dairin0d.Rendering {
 						xmax = Mathf.Min(xmax, dataX.Length-1);
 						ymax = Mathf.Min(ymax, dataY.Length-1);
 						
-						int mask = 1 << octant;
+						byte mask = (byte)(1 << octant);
 						
 						for (int x = xmin; x <= xmax; x++) {
 							dataX[x] |= mask;
