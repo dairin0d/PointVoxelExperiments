@@ -35,6 +35,10 @@ namespace dairin0d.Rendering {
 		private int[] data;
 		public int[] Data => data;
 		
+		private int[] dataX, dataY;
+		public int[] DataX => dataX;
+		public int[] DataY => dataY;
+		
 		public int SizeShift { get; private set; }
 		public int Size => 1 << SizeShift;
 		
@@ -44,6 +48,9 @@ namespace dairin0d.Rendering {
 			
 			SizeShift = sizeShift;
 			data = new int[Size * Size];
+			
+			dataX = new int[Size];
+			dataY = new int[Size];
 		}
 		
 		// The input vectors are relative to a box of (1 << shift) size
@@ -141,6 +148,45 @@ namespace dairin0d.Rendering {
 							dotXr += dotXdy;
 							dotYr += dotYdy;
 							dotZr += dotZdy;
+						}
+						
+						++octant;
+					}
+				}
+			}
+			
+			System.Array.Clear(dataX, 0, dataX.Length);
+			System.Array.Clear(dataY, 0, dataY.Length);
+			
+			Tx += half_pixel;
+			Ty += half_pixel;
+			
+			octant = 0;
+			for (int subZ = -1; subZ <= 1; subZ += 2) {
+				for (int subY = -1; subY <= 1; subY += 2) {
+					for (int subX = -1; subX <= 1; subX += 2) {
+						int dx = (Xx*subX + Yx*subY + Zx*subZ) >> 1;
+						int dy = (Xy*subX + Yy*subY + Zy*subZ) >> 1;
+						int cx = Tx + dx;
+						int cy = Ty + dy;
+						
+						int xmin = ((cx-extents_x) >> subpixel_shift);
+						int ymin = ((cy-extents_y) >> subpixel_shift);
+						int xmax = ((cx+extents_x) >> subpixel_shift);
+						int ymax = ((cy+extents_y) >> subpixel_shift);
+						
+						xmin = Mathf.Max(xmin, 0);
+						ymin = Mathf.Max(ymin, 0);
+						xmax = Mathf.Min(xmax, dataX.Length-1);
+						ymax = Mathf.Min(ymax, dataY.Length-1);
+						
+						int mask = 1 << octant;
+						
+						for (int x = xmin; x <= xmax; x++) {
+							dataX[x] |= mask;
+						}
+						for (int y = ymin; y <= ymax; y++) {
+							dataY[y] |= mask;
 						}
 						
 						++octant;

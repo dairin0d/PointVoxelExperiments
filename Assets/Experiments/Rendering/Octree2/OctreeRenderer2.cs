@@ -567,6 +567,7 @@ namespace dairin0d.Rendering.Octree2 {
         public float DrawBias = 1;
         
         public bool UseMap = true;
+        public bool UseMap1D = false;
         
         public bool UseMaxCondition = true;
         
@@ -600,6 +601,7 @@ namespace dairin0d.Rendering.Octree2 {
 
             toggleWidgets.Add(new Widget<bool>("Use Stencil", () => UseStencil, (value) => { UseStencil = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Map", () => UseMap, (value) => { UseMap = value; }));
+            toggleWidgets.Add(new Widget<bool>("Use Map 1D", () => UseMap1D, (value) => { UseMap1D = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Max", () => UseMaxCondition, (value) => { UseMaxCondition = value; }));
             toggleWidgets.Add(new Widget<bool>("Update Cache", () => UpdateCache, (value) => { UpdateCache = value; }));
         }
@@ -633,6 +635,8 @@ namespace dairin0d.Rendering.Octree2 {
             fixed (Delta* deltas = this.deltas)
             fixed (StackEntry* stack = this.stack)
             fixed (int* map = octantMap.Data)
+            fixed (int* xmap = octantMap.DataX)
+            fixed (int* ymap = octantMap.DataY)
             fixed (int* readIndexCache = cache.indexCache0)
             fixed (int* writeIndexCache = cache.indexCache1)
             fixed (NodeInfo* readInfoCache = cache.infoCache0)
@@ -661,7 +665,7 @@ namespace dairin0d.Rendering.Octree2 {
                         
                         readIndex = (readIndex << 8) | mask;
                         
-                        Render(buf, w, h, bufShift, queues, deltas, stack, map,
+                        Render(buf, w, h, bufShift, queues, deltas, stack, map, xmap, ymap,
                             in matrix, maxDepth, node, color, nodes, colors,
                             readIndexCache, writeIndexCache, readInfoCache, writeInfoCache,
                             readIndex, ref writeIndex, LoadNode);
@@ -681,7 +685,7 @@ namespace dairin0d.Rendering.Octree2 {
         unsafe delegate void LoadFuncDelegate(int loadAddress, NodeInfo* info8, int* nodes, Color32* colors);
 
         unsafe void Render(Buffer.DataItem* buf, int w, int h, int bufShift,
-            uint* queues, Delta* deltas, StackEntry* stack, int* map,
+            uint* queues, Delta* deltas, StackEntry* stack, int* map, int* xmap, int* ymap,
             in Matrix4x4 matrix, int maxDepth, int rootNode, Color32 rootColor, int* nodes, Color32* colors,
             int* readIndexCache, int* writeIndexCache, NodeInfo* readInfoCache, NodeInfo* writeInfoCache,
             int readIndex, ref int writeIndex, LoadFuncDelegate loadFunc)
@@ -732,6 +736,7 @@ namespace dairin0d.Rendering.Octree2 {
             int yShift1 = yShift - 1;
             
             bool useMap = UseMap;
+            bool useMap1D = UseMap1D;
             int ignoreMap = (UseMap ? 0 : 0xFF);
             int ignoreStencil = (UseStencil ? -1 : 0);
             
@@ -785,15 +790,30 @@ namespace dairin0d.Rendering.Octree2 {
                 
                 // Occlusion test
                 if (useMap) {
-                    for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
-                        var bufY = buf + (y << bufShift);
-                        var mapY = map + ((my >> toMapShift) << mapShift);
-                        for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
-                            int mask = mapY[mx >> toMapShift] & nodeMask;
-                            bufY[x].id += 1;
-                            if ((mask != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
-                                lastMY = my;
-                                goto traverse;
+                    if (useMap1D) {
+                        for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
+                            var bufY = buf + (y << bufShift);
+                            int maskY = ymap[my >> toMapShift] & nodeMask;
+                            for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
+                                int mask = xmap[mx >> toMapShift] & maskY;
+                                bufY[x].id += 1;
+                                if ((mask != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
+                                    lastMY = my;
+                                    goto traverse;
+                                }
+                            }
+                        }
+                    } else {
+                        for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
+                            var bufY = buf + (y << bufShift);
+                            var mapY = map + ((my >> toMapShift) << mapShift);
+                            for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
+                                int mask = mapY[mx >> toMapShift] & nodeMask;
+                                bufY[x].id += 1;
+                                if ((mask != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
+                                    lastMY = my;
+                                    goto traverse;
+                                }
                             }
                         }
                     }
@@ -893,28 +913,57 @@ namespace dairin0d.Rendering.Octree2 {
                         curr->state.color = info8[octant].Color;
                     }
                 } else {
-                    for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
-                        var bufY = buf + (y << bufShift);
-                        var mapY = map + ((my >> toMapShift) << mapShift);
-                        for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
-                            int mask = mapY[mx >> toMapShift] & nodeMask;
-                            if ((mask != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
-                                int octant = unchecked((int)(forwardQueues[mask] & 7));
-                                int z = state.z + (deltas[octant].z >> state.depth);
-                                bufY[x].id += 1;
-                                if (z < bufY[x].depth) {
-                                    var color24 = info8[octant].Color;
-                                    bufY[x].color = new Color32 {
-                                        // r = color24.R,
-                                        // g = color24.G,
-                                        // b = color24.B,
-                                        r = (byte)((color24.R * blendFactorInv + state.color.R * blendFactor + 255) >> 8),
-                                        g = (byte)((color24.G * blendFactorInv + state.color.G * blendFactor + 255) >> 8),
-                                        b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
-                                        a = 255
-                                    };
-                                    bufY[x].depth = z;
-                                    bufY[x].stencil = 1;
+                    if (useMap1D) {
+                        for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
+                            var bufY = buf + (y << bufShift);
+                            int maskY = ymap[my >> toMapShift] & nodeMask;
+                            for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
+                                int mask = xmap[mx >> toMapShift] & maskY;
+                                if ((mask != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
+                                    int octant = unchecked((int)(forwardQueues[mask] & 7));
+                                    int z = state.z + (deltas[octant].z >> state.depth);
+                                    bufY[x].id += 1;
+                                    if (z < bufY[x].depth) {
+                                        var color24 = info8[octant].Color;
+                                        bufY[x].color = new Color32 {
+                                            // r = color24.R,
+                                            // g = color24.G,
+                                            // b = color24.B,
+                                            r = (byte)((color24.R * blendFactorInv + state.color.R * blendFactor + 255) >> 8),
+                                            g = (byte)((color24.G * blendFactorInv + state.color.G * blendFactor + 255) >> 8),
+                                            b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
+                                            a = 255
+                                        };
+                                        bufY[x].depth = z;
+                                        bufY[x].stencil = 1;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        for (int y = state.y0, my = state.my0; y <= state.y1; y++, my += state.pixelSize) {
+                            var bufY = buf + (y << bufShift);
+                            var mapY = map + ((my >> toMapShift) << mapShift);
+                            for (int x = state.x0, mx = state.mx0; x <= state.x1; x++, mx += state.pixelSize) {
+                                int mask = mapY[mx >> toMapShift] & nodeMask;
+                                if ((mask != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
+                                    int octant = unchecked((int)(forwardQueues[mask] & 7));
+                                    int z = state.z + (deltas[octant].z >> state.depth);
+                                    bufY[x].id += 1;
+                                    if (z < bufY[x].depth) {
+                                        var color24 = info8[octant].Color;
+                                        bufY[x].color = new Color32 {
+                                            // r = color24.R,
+                                            // g = color24.G,
+                                            // b = color24.B,
+                                            r = (byte)((color24.R * blendFactorInv + state.color.R * blendFactor + 255) >> 8),
+                                            g = (byte)((color24.G * blendFactorInv + state.color.G * blendFactor + 255) >> 8),
+                                            b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
+                                            a = 255
+                                        };
+                                        bufY[x].depth = z;
+                                        bufY[x].stencil = 1;
+                                    }
                                 }
                             }
                         }
