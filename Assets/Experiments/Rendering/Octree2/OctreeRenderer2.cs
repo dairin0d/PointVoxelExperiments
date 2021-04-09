@@ -164,11 +164,11 @@ namespace dairin0d.Rendering.Octree2 {
                         if (show_depth) {
                             byte d = (byte)(data_x->depth >> depth_shift);
                             colors_x->r = colors_x->g = colors_x->b = d;
-                            colors_x->a = data_x->color.a;
+                            colors_x->a = 255;
                         } else if (show_complexity) {
                             byte d = (byte)(data_x->id << complexity_shift);
                             colors_x->r = colors_x->g = colors_x->b = d;
-                            colors_x->a = data_x->color.a;
+                            colors_x->a = 255;
                         } else {
                             *colors_x = data_x->color;
                         }
@@ -462,11 +462,20 @@ namespace dairin0d.Rendering.Octree2 {
             float depth_scale = (1 << DepthResolution) / (cam.farClipPlane - cam.nearClipPlane);
             var depth_scale_matrix = Matrix4x4.Scale(new Vector3(1, 1, depth_scale));
             
+            Vector2 subsampleOffset = default;
+            if (buffer.Subsample) {
+                Subsampler.Get(out int subsampleX, out int subsampleY);
+                subsampleOffset.x = (subsampleX - 0.5f) * 0.5f;
+                subsampleOffset.y = (subsampleY - 0.5f) * 0.5f;
+            }
+            
             foreach (var (sort_z, instance) in visibleObjects) {
                 var voxel_scale_matrix = Matrix4x4.Scale(Vector3.one * instance.Model.Bounds.size.z); // for now
                 var obj2world = instance.transform.localToWorldMatrix * voxel_scale_matrix;
                 var mvp_matrix = vpMatrix * obj2world;
                 mvp_matrix = depth_scale_matrix * mvp_matrix;
+                mvp_matrix.m03 -= subsampleOffset.x;
+                mvp_matrix.m13 -= subsampleOffset.y;
                 yield return (instance, mvp_matrix, 0); // for now
             }
         }
@@ -499,6 +508,12 @@ namespace dairin0d.Rendering.Octree2 {
         const int PrecisionMask = ((1 << PrecisionShift) - 1);
         const int PrecisionMaskInv = ~PrecisionMask;
         
+        const int SubpixelShift = 16;
+        const int SubpixelSize = 1 << SubpixelShift;
+        const int SubpixelMask = SubpixelSize - 1;
+        const int SubpixelMaskInv = ~SubpixelMask;
+        const int SubpixelHalf = SubpixelSize >> 1;
+        
         struct Delta {
             public int x, y, z, pad0;
             public int x0, y0, x1, y1;
@@ -515,7 +530,7 @@ namespace dairin0d.Rendering.Octree2 {
         struct NodeState {
             public int x0, y0, x1, y1;
             public int mx0, my0, mx1, my1;
-            public int depth, pixelShift, pixelSize, z;
+            public int depth, pixelShift, pixelSize, x, y, z;
             public int parentOffset, readIndex, loadAddress;
             public Color24 color;
         }
@@ -567,9 +582,9 @@ namespace dairin0d.Rendering.Octree2 {
         public float DrawBias = 1;
         
         public bool UseMap = true;
-        public bool UseMap1D = false;
+        public bool UseMap1D = true;
         
-        public bool UseMaxCondition = true;
+        public bool UseMaxCondition = false;
         
         public int CacheCount;
         public int LoadedCount;
@@ -581,6 +596,8 @@ namespace dairin0d.Rendering.Octree2 {
         public int SplatAt = 2;
         
         public int BlendFactor = 0;
+        
+        public bool UsePoints = false;
         
         bool useSubsample;
         
@@ -600,6 +617,7 @@ namespace dairin0d.Rendering.Octree2 {
             sliderWidgets.Add(new Widget<float>("BlendFactor", () => BlendFactor, (value) => { BlendFactor = (int)value; }, 0, 255));
 
             toggleWidgets.Add(new Widget<bool>("Use Stencil", () => UseStencil, (value) => { UseStencil = value; }));
+            toggleWidgets.Add(new Widget<bool>("Use Points", () => UsePoints, (value) => { UsePoints = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Map", () => UseMap, (value) => { UseMap = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Map 1D", () => UseMap1D, (value) => { UseMap1D = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Max", () => UseMaxCondition, (value) => { UseMaxCondition = value; }));
@@ -665,10 +683,17 @@ namespace dairin0d.Rendering.Octree2 {
                         
                         readIndex = (readIndex << 8) | mask;
                         
-                        Render(buf, w, h, bufShift, queues, deltas, stack, map, xmap, ymap,
-                            in matrix, maxDepth, node, color, nodes, colors,
-                            readIndexCache, writeIndexCache, readInfoCache, writeInfoCache,
-                            readIndex, ref writeIndex, LoadNode);
+                        if (UsePoints) {
+                            RenderPoints(buf, w, h, bufShift, queues, deltas, stack, map, xmap, ymap,
+                                in matrix, maxDepth, node, color, nodes, colors,
+                                readIndexCache, writeIndexCache, readInfoCache, writeInfoCache,
+                                readIndex, ref writeIndex, LoadNode);
+                        } else {
+                            Render(buf, w, h, bufShift, queues, deltas, stack, map, xmap, ymap,
+                                in matrix, maxDepth, node, color, nodes, colors,
+                                readIndexCache, writeIndexCache, readInfoCache, writeInfoCache,
+                                readIndex, ref writeIndex, LoadNode);
+                        }
                         
                         if (writeIndex > writeIndexStart) {
                             cache.targetCacheOffsets[cacheOffsetKey] = writeIndexStart;
@@ -985,7 +1010,7 @@ namespace dairin0d.Rendering.Octree2 {
             }
         }
         
-        unsafe void Setup(in Matrix4x4 matrix, ref int maxDepth, out int potShift, out int Cx, out int Cy,
+        void Setup(in Matrix4x4 matrix, ref int maxDepth, out int potShift, out int Cx, out int Cy,
             out int minX, out int minY, out int maxX, out int maxY, out int minZ)
         {
             // Shape / size distortion is less noticeable than the presence of gaps
@@ -994,14 +1019,6 @@ namespace dairin0d.Rendering.Octree2 {
             var Y = new Vector3 {x = matrix.m01, y = matrix.m11, z = matrix.m21};
             var Z = new Vector3 {x = matrix.m02, y = matrix.m12, z = matrix.m22};
             var T = new Vector3 {x = matrix.m03, y = matrix.m13, z = matrix.m23};
-            
-            ///////////////////////////////////////
-            if (useSubsample) {
-                Subsampler.Get(out int subsampleX, out int subsampleY);
-                T.x -= (subsampleX - 0.5f) * 0.5f;
-                T.y -= (subsampleY - 0.5f) * 0.5f;
-            }
-            ///////////////////////////////////////
             
             var XN = ((Vector2)X).normalized;
             var YN = ((Vector2)Y).normalized;
@@ -1100,6 +1117,391 @@ namespace dairin0d.Rendering.Octree2 {
                     }
                 }
             }
+        }
+        
+        unsafe void RenderPoints(Buffer.DataItem* buf, int w, int h, int bufShift,
+            uint* queues, Delta* deltas, StackEntry* stack, byte* map, byte* xmap, byte* ymap,
+            in Matrix4x4 matrix, int maxDepth, int rootNode, Color32 rootColor, int* nodes, Color32* colors,
+            int* readIndexCache, int* writeIndexCache, NodeInfo* readInfoCache, NodeInfo* writeInfoCache,
+            int readIndex, ref int writeIndex, LoadFuncDelegate loadFunc)
+        {
+            SetupPoints(in matrix, out int potShift,
+                out int centerX, out int centerY, out int extentX, out int extentY, out int startZ);
+            
+            if ((extentX < 0) | (extentY < 0)) {
+                Debug.LogError($"extent: ({extentX}, {extentY})");
+                return;
+            }
+            
+            if (maxDepth > potShift+1) maxDepth = potShift+1;
+            
+            int marginX = extentX >> (potShift+1);
+            int marginY = extentY >> (potShift+1);
+            
+            maxDepth = Mathf.Clamp(maxDepth, 0, MaxLevel);
+            
+            int forwardKey = OctantOrder.Key(in matrix);
+            int reverseKey = forwardKey ^ 0b11100000000;
+            uint* forwardQueues = queues + forwardKey;
+            uint* reverseQueues = queues + reverseKey;
+            
+            int bufMask = (1 << bufShift) - 1;
+            int bufMaskInv = ~bufMask;
+            
+            int ignoreStencil = (UseStencil ? -1 : 0);
+            int blendFactor = BlendFactor;
+            int blendFactorInv = 255 - blendFactor;
+            bool updateCache = UpdateCache;
+            IndexCache8 emptyIndices = new IndexCache8 {n0=-1, n1=-1, n2=-1, n3=-1, n4=-1, n5=-1, n6=-1, n7=-1};
+            
+            var curr = stack + 1;
+            curr->state.depth = 1;
+            curr->state.x = centerX;
+            curr->state.y = centerY;
+            curr->state.z = startZ;
+            curr->state.x0 = (curr->state.x + SubpixelHalf - extentX) >> SubpixelShift;
+            curr->state.y0 = (curr->state.y + SubpixelHalf - extentY) >> SubpixelShift;
+            curr->state.x1 = (curr->state.x - SubpixelHalf + extentX) >> SubpixelShift;
+            curr->state.y1 = (curr->state.y - SubpixelHalf + extentY) >> SubpixelShift;
+            if (curr->state.x0 < 0) curr->state.x0 = 0;
+            if (curr->state.y0 < 0) curr->state.y0 = 0;
+            if (curr->state.x1 >= w) curr->state.x1 = w-1;
+            if (curr->state.y1 >= h) curr->state.y1 = h-1;
+            
+            curr->state.parentOffset = 0;
+            curr->state.readIndex = readIndex;
+            curr->state.loadAddress = rootNode;
+            curr->state.color = new Color24 {R=rootColor.r, G=rootColor.g, B=rootColor.b};
+            
+            {
+                var state = curr->state;
+                for (int y = state.y0; y <= state.y1; y++) {
+                    var bufY = buf + (y << bufShift);
+                    for (int x = state.x0; x <= state.x1; x++) {
+                        bufY[x].id += 1;
+                        bufY[x].stencil = 0;
+                    }
+                }
+            }
+            
+            while (curr > stack) {
+                var state = curr->state;
+                --curr;
+                
+                int nodeMask = state.readIndex & 0xFF;
+                
+                int lastY = state.y0;
+                
+                // Occlusion test
+                for (int y = state.y0; y <= state.y1; y++) {
+                    var bufY = buf + (y << bufShift);
+                    for (int x = state.x0; x <= state.x1; x++) {
+                        bufY[x].id += 1;
+                        if ((state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
+                            lastY = y;
+                            goto traverse;
+                        }
+                    }
+                }
+                continue;
+                traverse:;
+                
+                // Calculate base parent offset for this node's children
+                int parentOffset = writeIndex << 3;
+                var info8 = writeInfoCache + parentOffset;
+                var index8 = writeIndexCache + parentOffset;
+                var index8read = index8;
+                
+                // Write reference to this cached node in the parent
+                writeIndexCache[state.parentOffset] = writeIndex;
+                
+                // Clear the cached node references
+                *((IndexCache8*)index8) = emptyIndices;
+                
+                if (state.readIndex < 0) {
+                    loadFunc(state.loadAddress, info8, nodes, colors);
+                    LoadedCount++;
+                } else {
+                    int _readIndex = state.readIndex >> 8;
+                    index8read = readIndexCache + (_readIndex << 3);
+                    *((InfoCache8*)info8) = ((InfoCache8*)readInfoCache)[_readIndex];
+                }
+                
+                writeIndex += 1;
+                
+                ///////////////////////////////////////////
+                
+                bool sizeCondition = (state.x1-state.x0 < 2) & (state.y1-state.y0 < 2);
+                bool shouldDraw = (state.depth >= maxDepth) | sizeCondition;
+                shouldDraw |= !updateCache & (state.readIndex < 0);
+                
+                if (!shouldDraw) {
+                    var queue = reverseQueues[nodeMask];
+                    
+                    int subExtentX = (extentX >> state.depth);
+                    int subExtentY = (extentY >> state.depth);
+                    if (UseMap) {
+                        subExtentX -= SubpixelHalf;
+                        subExtentY -= SubpixelHalf;
+                    } else {
+                        subExtentX -= marginX;
+                        subExtentY -= marginY;
+                    }
+                    
+                    for (; queue != 0; queue >>= 4) {
+                        int octant = unchecked((int)(queue & 7));
+                        
+                        int x = state.x + (deltas[octant].x >> state.depth);
+                        int y = state.y + (deltas[octant].y >> state.depth);
+                        
+                        int x0 = (x - subExtentX) >> SubpixelShift;
+                        int y0 = (y - subExtentY) >> SubpixelShift;
+                        int x1 = (x + subExtentX) >> SubpixelShift;
+                        int y1 = (y + subExtentY) >> SubpixelShift;
+                        x0 = (x0 < state.x0 ? state.x0 : x0);
+                        y0 = (y0 < lastY ? lastY : y0);
+                        x1 = (x1 > state.x1 ? state.x1 : x1);
+                        y1 = (y1 > state.y1 ? state.y1 : y1);
+                        
+                        if ((x0 > x1) | (y0 > y1)) continue;
+                        
+                        ++curr;
+                        curr->state.depth = state.depth+1;
+                        curr->state.x = x;
+                        curr->state.y = y;
+                        curr->state.z = state.z + (deltas[octant].z >> state.depth);
+                        curr->state.x0 = x0;
+                        curr->state.y0 = y0;
+                        curr->state.x1 = x1;
+                        curr->state.y1 = y1;
+                        
+                        curr->state.parentOffset = parentOffset | octant;
+                        curr->state.readIndex = (index8read[octant] << 8) | info8[octant].Mask;
+                        curr->state.loadAddress = info8[octant].Address;
+                        curr->state.color = info8[octant].Color;
+                    }
+                } else if ((state.x1 == state.x0) & (state.y1 == state.y0)) {
+                    var pixel = buf + (state.x0 | (state.y0 << bufShift));
+                    pixel->color = new Color32 {
+                        r = state.color.R,
+                        g = state.color.G,
+                        b = state.color.B,
+                        a = 255
+                    };
+                    pixel->depth = state.z;
+                    pixel->stencil = 1;
+                } else if (UseMap) {
+                    int mapHalf = 1 << (SubpixelShift + potShift - state.depth);
+                    int toMapShift = (SubpixelShift + potShift - state.depth + 1) - octantMap.SizeShift;
+                    int sx0 = (state.x0 << SubpixelShift) + SubpixelHalf - (state.x - mapHalf);
+                    int sy0 = (state.y0 << SubpixelShift) + SubpixelHalf - (state.y - mapHalf);
+                    
+                    for (int y = state.y0, my = sy0; y <= state.y1; y++, my += SubpixelSize) {
+                        var bufY = buf + (y << bufShift);
+                        int maskY = ymap[my >> toMapShift] & nodeMask;
+                        for (int x = state.x0, mx = sx0; x <= state.x1; x++, mx += SubpixelSize) {
+                            int mask = xmap[mx >> toMapShift] & maskY;
+                            if ((mask != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
+                                int octant = unchecked((int)(forwardQueues[mask] & 7));
+                                int z = state.z + (deltas[octant].z >> state.depth);
+                                bufY[x].id += 1;
+                                if (z < bufY[x].depth) {
+                                    var color24 = info8[octant].Color;
+                                    bufY[x].color = new Color32 {
+                                        // r = color24.R,
+                                        // g = color24.G,
+                                        // b = color24.B,
+                                        r = (byte)((color24.R * blendFactorInv + state.color.R * blendFactor + 255) >> 8),
+                                        g = (byte)((color24.G * blendFactorInv + state.color.G * blendFactor + 255) >> 8),
+                                        b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
+                                        a = 255
+                                    };
+                                    bufY[x].depth = z;
+                                    bufY[x].stencil = 1;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    var queue = forwardQueues[nodeMask];
+                    
+                    // int subExtentX = (extentX >> state.depth);
+                    // int subExtentY = (extentY >> state.depth);
+                    // int subExtentX = 1 << (SubpixelShift + potShift - state.depth - 1);
+                    // int subExtentY = 1 << (SubpixelShift + potShift - state.depth - 1);
+                    
+                    for (; queue != 0; queue >>= 4) {
+                        int octant = unchecked((int)(queue & 7));
+                        
+                        int x = state.x + (deltas[octant].x >> state.depth);
+                        int y = state.y + (deltas[octant].y >> state.depth);
+                        
+                        // int x0 = (x - subExtentX) >> SubpixelShift;
+                        // int y0 = (y - subExtentY) >> SubpixelShift;
+                        // int x1 = (x + subExtentX) >> SubpixelShift;
+                        // int y1 = (y + subExtentY) >> SubpixelShift;
+                        // x0 = (x0 < state.x0 ? state.x0 : x0);
+                        // y0 = (y0 < lastY ? lastY : y0);
+                        // x1 = (x1 > state.x1 ? state.x1 : x1);
+                        // y1 = (y1 > state.y1 ? state.y1 : y1);
+                        
+                        // int z = state.z + (deltas[octant].z >> state.depth);
+                        
+                        // for (y = y0; y <= y1; y++) {
+                        //     var bufY = buf + (y << bufShift);
+                        //     for (x = x0; x <= x1; x++) {
+                        //         var pixel = bufY + x;
+                        //         if ((z < pixel->depth) & ((pixel->stencil & ignoreStencil) == 0)) {
+                        //             var color24 = info8[octant].Color;
+                        //             pixel->color = new Color32 {
+                        //                 // r = color24.R,
+                        //                 // g = color24.G,
+                        //                 // b = color24.B,
+                        //                 r = (byte)((color24.R * blendFactorInv + state.color.R * blendFactor + 255) >> 8),
+                        //                 g = (byte)((color24.G * blendFactorInv + state.color.G * blendFactor + 255) >> 8),
+                        //                 b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
+                        //                 a = 255
+                        //             };
+                        //             pixel->depth = z;
+                        //             pixel->stencil = 1;
+                        //         }
+                        //     }
+                        // }
+                        
+                        int px = x >> SubpixelShift;
+                        int py = y >> SubpixelShift;
+                        if (((px|py) & bufMaskInv) != 0) continue;
+                        
+                        int z = state.z + (deltas[octant].z >> state.depth);
+                        
+                        var pixel = buf + (px | (py << bufShift));
+                        if ((z < pixel->depth) & ((pixel->stencil & ignoreStencil) == 0)) {
+                            var color24 = info8[octant].Color;
+                            pixel->color = new Color32 {
+                                // r = color24.R,
+                                // g = color24.G,
+                                // b = color24.B,
+                                r = (byte)((color24.R * blendFactorInv + state.color.R * blendFactor + 255) >> 8),
+                                g = (byte)((color24.G * blendFactorInv + state.color.G * blendFactor + 255) >> 8),
+                                b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
+                                a = 255
+                            };
+                            pixel->depth = z;
+                            pixel->stencil = 1;
+                        }
+                    }
+                }
+            }            
+        }
+        
+        void SetupPoints(in Matrix4x4 matrix, out int potShift,
+            out int Cx, out int Cy, out int extentX, out int extentY, out int minZ)
+        {
+            var X = new Vector3 {x = matrix.m00, y = matrix.m10, z = matrix.m20};
+            var Y = new Vector3 {x = matrix.m01, y = matrix.m11, z = matrix.m21};
+            var Z = new Vector3 {x = matrix.m02, y = matrix.m12, z = matrix.m22};
+            var T = new Vector3 {x = matrix.m03, y = matrix.m13, z = matrix.m23};
+            
+            float maxSpan = 0.5f * CalculateMaxGap(X.x, X.y, Y.x, Y.y, Z.x, Z.y);
+            
+            // Power-of-two bounding square
+            potShift = 0;
+            for (int potSize = 1 << potShift; (potSize < maxSpan) & (potShift <= 30); potShift++, potSize <<= 1);
+            
+            int potShiftDelta = SubpixelShift - potShift;
+            float potScale = (potShiftDelta >= 0 ? (1 << potShiftDelta) : 1f / (1 << -potShiftDelta));
+            
+            int Xx = (int)(X.x*potScale);
+            int Xy = (int)(X.y*potScale);
+            int Yx = (int)(Y.x*potScale);
+            int Yy = (int)(Y.y*potScale);
+            int Zx = (int)(Z.x*potScale);
+            int Zy = (int)(Z.y*potScale);
+            
+            int maxGap = CalculateMaxGap(Xx, Xy, Yx, Yy, Zx, Zy);
+            if (maxGap > SubpixelSize) {
+                potShift++;
+                potShiftDelta = SubpixelShift - potShift;
+                Xx >>= 1; Xy >>= 1;
+                Yx >>= 1; Yy >>= 1;
+                Zx >>= 1; Zy >>= 1;
+            }
+            
+            octantMap.Bake(Xx >> 1, Xy >> 1, Yx >> 1, Yy >> 1, Zx >> 1, Zy >> 1, SubpixelHalf, SubpixelHalf, SubpixelShift);
+            // octantMap.Bake(Xx, Xy, Yx, Yy, Zx, Zy, SubpixelHalf, SubpixelHalf, SubpixelShift);
+            
+            Xx <<= potShift; Xy <<= potShift;
+            Yx <<= potShift; Yy <<= potShift;
+            Zx <<= potShift; Zy <<= potShift;
+            Xx >>= 1; Xy >>= 1;
+            Yx >>= 1; Yy >>= 1;
+            Zx >>= 1; Zy >>= 1;
+            
+            extentX = (Xx < 0 ? -Xx : Xx) + (Yx < 0 ? -Yx : Yx) + (Zx < 0 ? -Zx : Zx);
+            extentY = (Xy < 0 ? -Xy : Xy) + (Yy < 0 ? -Yy : Yy) + (Zy < 0 ? -Zy : Zy);
+            
+            float coordScale = 1 << SubpixelShift;
+            int Tx = (int)(T.x*coordScale + 0.5f);
+            int Ty = (int)(T.y*coordScale + 0.5f);
+            Cx = Tx;
+            Cy = Ty;
+            
+            int Xz = ((int)X.z) >> 1;
+            int Yz = ((int)Y.z) >> 1;
+            int Zz = ((int)Z.z) >> 1;
+            int Tz = ((int)T.z);
+            int extentZ = (Xz < 0 ? -Xz : Xz) + (Yz < 0 ? -Yz : Yz) + (Zz < 0 ? -Zz : Zz);
+            minZ = Tz - extentZ;
+            
+            int octant = 0;
+            for (int subZ = -1; subZ <= 1; subZ += 2) {
+                for (int subY = -1; subY <= 1; subY += 2) {
+                    for (int subX = -1; subX <= 1; subX += 2) {
+                        deltas[octant].x = (Xx * subX + Yx * subY + Zx * subZ);
+                        deltas[octant].y = (Xy * subX + Yy * subY + Zy * subZ);
+                        deltas[octant].z = (Xz * subX + Yz * subY + Zz * subZ) + extentZ;
+                        ++octant;
+                    }
+                }
+            }
+        }
+        
+        float CalculateMaxGap(float Xx, float Xy, float Yx, float Yy, float Zx, float Zy) {
+            if (Xx < 0) Xx = -Xx;
+            if (Xy < 0) Xy = -Xy;
+            if (Yx < 0) Yx = -Yx;
+            if (Yy < 0) Yy = -Yy;
+            if (Zx < 0) Zx = -Zx;
+            if (Zy < 0) Zy = -Zy;
+            
+            float maxGap = 0, gap = 0;
+            gap = Xx + Yx; if (gap > maxGap) maxGap = gap;
+            gap = Xy + Yy; if (gap > maxGap) maxGap = gap;
+            gap = Yx + Zx; if (gap > maxGap) maxGap = gap;
+            gap = Yy + Zy; if (gap > maxGap) maxGap = gap;
+            gap = Zx + Xx; if (gap > maxGap) maxGap = gap;
+            gap = Zy + Xy; if (gap > maxGap) maxGap = gap;
+            
+            return maxGap;
+        }
+        
+        int CalculateMaxGap(int Xx, int Xy, int Yx, int Yy, int Zx, int Zy) {
+            if (Xx < 0) Xx = -Xx;
+            if (Xy < 0) Xy = -Xy;
+            if (Yx < 0) Yx = -Yx;
+            if (Yy < 0) Yy = -Yy;
+            if (Zx < 0) Zx = -Zx;
+            if (Zy < 0) Zy = -Zy;
+            
+            int maxGap = 0, gap = 0;
+            gap = Xx + Yx; if (gap > maxGap) maxGap = gap;
+            gap = Xy + Yy; if (gap > maxGap) maxGap = gap;
+            gap = Yx + Zx; if (gap > maxGap) maxGap = gap;
+            gap = Yy + Zy; if (gap > maxGap) maxGap = gap;
+            gap = Zx + Xx; if (gap > maxGap) maxGap = gap;
+            gap = Zy + Xy; if (gap > maxGap) maxGap = gap;
+            
+            return maxGap;
         }
     }
 }

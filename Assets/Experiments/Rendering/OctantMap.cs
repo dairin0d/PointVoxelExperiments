@@ -74,6 +74,7 @@ namespace dairin0d.Rendering {
 			}
 			
 			int sizeShift = SizeShift;
+			int mapSize = 1 << sizeShift;
 			
 			int subpixel_shift = shift - sizeShift;
 			int pixel_size = (1 << subpixel_shift), half_pixel = pixel_size >> 1;
@@ -121,6 +122,11 @@ namespace dairin0d.Rendering {
 						int ymin = ((cy-extents_y) >> subpixel_shift) - 2;
 						int xmax = ((cx+extents_x) >> subpixel_shift) + 2;
 						int ymax = ((cy+extents_y) >> subpixel_shift) + 2;
+						
+						if (xmin < 0) xmin = 0;
+						if (ymin < 0) ymin = 0;
+						if (xmax > mapSize) xmax = mapSize;
+						if (ymax > mapSize) ymax = mapSize;
 						
 						int offset_x = (xmin << subpixel_shift) - cx;
 						int offset_y = (ymin << subpixel_shift) - cy;
