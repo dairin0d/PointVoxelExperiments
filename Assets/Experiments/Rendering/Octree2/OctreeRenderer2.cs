@@ -1147,11 +1147,6 @@ namespace dairin0d.Rendering.Octree2 {
             SetupPoints(in matrix, out int potShift,
                 out int centerX, out int centerY, out int extentX, out int extentY, out int startZ);
             
-            if ((extentX < 0) | (extentY < 0)) {
-                Debug.LogError($"extent: ({extentX}, {extentY})");
-                return;
-            }
-            
             if (maxDepth > potShift+1) maxDepth = potShift+1;
             
             int marginX = extentX >> (potShift+1);
@@ -1172,6 +1167,9 @@ namespace dairin0d.Rendering.Octree2 {
             int blendFactorInv = 255 - blendFactor;
             bool updateCache = UpdateCache;
             IndexCache8 emptyIndices = new IndexCache8 {n0=-1, n1=-1, n2=-1, n3=-1, n4=-1, n5=-1, n6=-1, n7=-1};
+            
+            bool useMap = UseMap;
+            int splatAt = useMap ? SplatAt : 2;
             
             var curr = stack + 1;
             curr->state.depth = 1;
@@ -1250,7 +1248,7 @@ namespace dairin0d.Rendering.Octree2 {
                 
                 ///////////////////////////////////////////
                 
-                bool sizeCondition = (state.x1-state.x0 < 2) & (state.y1-state.y0 < 2);
+                bool sizeCondition = (state.x1-state.x0 < splatAt) & (state.y1-state.y0 < splatAt);
                 bool shouldDraw = (state.depth >= maxDepth) | sizeCondition;
                 shouldDraw |= !updateCache & (state.readIndex < 0);
                 
@@ -1259,7 +1257,7 @@ namespace dairin0d.Rendering.Octree2 {
                     
                     int subExtentX = (extentX >> state.depth);
                     int subExtentY = (extentY >> state.depth);
-                    if (UseMap) {
+                    if (useMap) {
                         subExtentX -= SubpixelHalf;
                         subExtentY -= SubpixelHalf;
                     } else {
@@ -1299,17 +1297,7 @@ namespace dairin0d.Rendering.Octree2 {
                         curr->state.loadAddress = info8[octant].Address;
                         curr->state.color = info8[octant].Color;
                     }
-                } else if ((state.x1 == state.x0) & (state.y1 == state.y0)) {
-                    var pixel = buf + (state.x0 | (state.y0 << bufShift));
-                    pixel->color = new Color32 {
-                        r = state.color.R,
-                        g = state.color.G,
-                        b = state.color.B,
-                        a = 255
-                    };
-                    pixel->depth = state.z;
-                    pixel->stencil = 1;
-                } else if (UseMap) {
+                } else if (useMap) {
                     int mapHalf = 1 << (SubpixelShift + potShift - state.depth);
                     int toMapShift = (SubpixelShift + potShift - state.depth + 1) - octantMap.SizeShift;
                     int sx0 = (state.x0 << SubpixelShift) + SubpixelHalf - (state.x - mapHalf);
@@ -1341,51 +1329,24 @@ namespace dairin0d.Rendering.Octree2 {
                             }
                         }
                     }
+                } else if ((state.x1 == state.x0) & (state.y1 == state.y0)) {
+                    var pixel = buf + (state.x0 | (state.y0 << bufShift));
+                    pixel->color = new Color32 {
+                        r = state.color.R,
+                        g = state.color.G,
+                        b = state.color.B,
+                        a = 255
+                    };
+                    pixel->depth = state.z;
+                    pixel->stencil = 1;
                 } else {
                     var queue = forwardQueues[nodeMask];
-                    
-                    // int subExtentX = (extentX >> state.depth);
-                    // int subExtentY = (extentY >> state.depth);
-                    // int subExtentX = 1 << (SubpixelShift + potShift - state.depth - 1);
-                    // int subExtentY = 1 << (SubpixelShift + potShift - state.depth - 1);
                     
                     for (; queue != 0; queue >>= 4) {
                         int octant = unchecked((int)(queue & 7));
                         
                         int x = state.x + (deltas[octant].x >> state.depth);
                         int y = state.y + (deltas[octant].y >> state.depth);
-                        
-                        // int x0 = (x - subExtentX) >> SubpixelShift;
-                        // int y0 = (y - subExtentY) >> SubpixelShift;
-                        // int x1 = (x + subExtentX) >> SubpixelShift;
-                        // int y1 = (y + subExtentY) >> SubpixelShift;
-                        // x0 = (x0 < state.x0 ? state.x0 : x0);
-                        // y0 = (y0 < lastY ? lastY : y0);
-                        // x1 = (x1 > state.x1 ? state.x1 : x1);
-                        // y1 = (y1 > state.y1 ? state.y1 : y1);
-                        
-                        // int z = state.z + (deltas[octant].z >> state.depth);
-                        
-                        // for (y = y0; y <= y1; y++) {
-                        //     var bufY = buf + (y << bufShift);
-                        //     for (x = x0; x <= x1; x++) {
-                        //         var pixel = bufY + x;
-                        //         if ((z < pixel->depth) & ((pixel->stencil & ignoreStencil) == 0)) {
-                        //             var color24 = info8[octant].Color;
-                        //             pixel->color = new Color32 {
-                        //                 // r = color24.R,
-                        //                 // g = color24.G,
-                        //                 // b = color24.B,
-                        //                 r = (byte)((color24.R * blendFactorInv + state.color.R * blendFactor + 255) >> 8),
-                        //                 g = (byte)((color24.G * blendFactorInv + state.color.G * blendFactor + 255) >> 8),
-                        //                 b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
-                        //                 a = 255
-                        //             };
-                        //             pixel->depth = z;
-                        //             pixel->stencil = 1;
-                        //         }
-                        //     }
-                        // }
                         
                         int px = x >> SubpixelShift;
                         int py = y >> SubpixelShift;
@@ -1410,7 +1371,7 @@ namespace dairin0d.Rendering.Octree2 {
                         }
                     }
                 }
-            }            
+            }
         }
         
         void SetupPoints(in Matrix4x4 matrix, out int potShift,
@@ -1421,7 +1382,7 @@ namespace dairin0d.Rendering.Octree2 {
             var Z = new Vector3 {x = matrix.m02, y = matrix.m12, z = matrix.m22};
             var T = new Vector3 {x = matrix.m03, y = matrix.m13, z = matrix.m23};
             
-            float maxSpan = 0.5f * CalculateMaxGap(X.x, X.y, Y.x, Y.y, Z.x, Z.y);
+            float maxSpan = 0.5f * CalculateMaxGap(X.x, X.y, Y.x, Y.y, Z.x, Z.y) * DrawBias;
             
             // Power-of-two bounding square
             potShift = 0;
