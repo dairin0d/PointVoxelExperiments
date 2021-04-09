@@ -161,6 +161,11 @@ namespace dairin0d.Rendering.Octree2 {
                     for (int x = 0, x2 = x2start; x < w; x++, x2 += x2step) {
                         var data_x = data_ptr_y + x;
                         var colors_x = colors_ptr_y + x2;
+                        
+                        byte r0 = colors_x->r;
+                        byte g0 = colors_x->g;
+                        byte b0 = colors_x->b;
+                        
                         if (show_depth) {
                             byte d = (byte)(data_x->depth >> depth_shift);
                             colors_x->r = colors_x->g = colors_x->b = d;
@@ -174,14 +179,28 @@ namespace dairin0d.Rendering.Octree2 {
                         }
                         
                         if (useSubsample) {
+                            int dr = colors_x->r - r0;
+                            if (dr < 0) dr = -dr;
+                            int dg = colors_x->g - g0;
+                            if (dg < 0) dg = -dg;
+                            int db = colors_x->b - b0;
+                            if (db < 0) db = -db;
+                            int dmax = (dr > dg ? dr : dg);
+                            dmax = (dmax > db ? dmax : db);
+                            int fac = dmax >> 1;
+                            int inv = 255 - fac;
+                            
                             for (int subY = 0; subY < 2; subY++) {
                                 var colors_sub_y = colors_ptr + (y2-y2start+subY) * w2;
                                 for (int subX = 0; subX < 2; subX++) {
                                     if ((subX == x2start) & (subY == y2start)) continue;
                                     var colors_sub_x = colors_sub_y + (x2-x2start+subX);
-                                    colors_sub_x->r = (byte)((colors_sub_x->r*3 + colors_x->r + 3) >> 2);
-                                    colors_sub_x->g = (byte)((colors_sub_x->g*3 + colors_x->g + 3) >> 2);
-                                    colors_sub_x->b = (byte)((colors_sub_x->b*3 + colors_x->b + 3) >> 2);
+                                    // colors_sub_x->r = (byte)((colors_sub_x->r*3 + colors_x->r + 3) >> 2);
+                                    // colors_sub_x->g = (byte)((colors_sub_x->g*3 + colors_x->g + 3) >> 2);
+                                    // colors_sub_x->b = (byte)((colors_sub_x->b*3 + colors_x->b + 3) >> 2);
+                                    colors_sub_x->r = (byte)((colors_sub_x->r*inv + colors_x->r*fac + 255) >> 8);
+                                    colors_sub_x->g = (byte)((colors_sub_x->g*inv + colors_x->g*fac + 255) >> 8);
+                                    colors_sub_x->b = (byte)((colors_sub_x->b*inv + colors_x->b*fac + 255) >> 8);
                                 }
                             }
                         }
