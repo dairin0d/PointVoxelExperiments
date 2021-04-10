@@ -52,9 +52,9 @@ namespace dairin0d.Rendering.Octree2 {
         private System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
         public float FrameTime {get; private set;}
 
-        public void RenderStart(Color32 background, bool clearColor = true) {
+        public void RenderStart(Color32 background) {
             stopwatch.Restart();
-            Clear(background, clearColor);
+            Clear(background);
         }
         
         public void RenderEnd(int depth_shift = -1) {
@@ -122,8 +122,8 @@ namespace dairin0d.Rendering.Octree2 {
             }
         }
         
-        public void UpdateTexture() {
-            Texture.SetPixels32(0, 0, Texture.width, Texture.height, colors, 0);
+        public unsafe void UpdateTexture() {
+            Texture.SetPixelData(colors, 0);
             Texture.Apply(false);
         }
         
@@ -131,11 +131,7 @@ namespace dairin0d.Rendering.Octree2 {
             int w = Width;
             int h = Height;
             int shift = TileShift;
-            int shift2 = shift * 2;
             int tile_size = 1 << shift;
-            int tile_area = 1 << shift2;
-            int tnx = TileCountX;
-            int tny = TileCountY;
 
             bool show_depth = (depth_shift >= 0);
             bool show_complexity = (depth_shift < -1);
@@ -209,7 +205,7 @@ namespace dairin0d.Rendering.Octree2 {
             }
         }
 
-        public unsafe void Clear(Color32 background, bool clearColor = true) {
+        public unsafe void Clear(Color32 background) {
             var clear_data = default(DataItem);
             clear_data.stencil = 0;
             clear_data.depth = int.MaxValue;
@@ -219,11 +215,7 @@ namespace dairin0d.Rendering.Octree2 {
             int w = Width;
             int h = Height;
             int shift = TileShift;
-            int shift2 = shift * 2;
             int tile_size = 1 << shift;
-            int tile_area = 1 << shift2;
-            int tnx = TileCountX;
-            int tny = TileCountY;
 
             fixed (DataItem* data_ptr = Data)
             {
@@ -231,13 +223,7 @@ namespace dairin0d.Rendering.Octree2 {
                     var data_ptr_y = data_ptr + y * tile_size;
                     for (int x = 0; x < w; x++) {
                         var data_x = data_ptr_y + x;
-                        if (clearColor) {
-                            *data_x = clear_data;
-                        } else {
-                            data_x->depth = clear_data.depth;
-                            data_x->stencil = clear_data.stencil;
-                            data_x->id = clear_data.id;
-                        }
+                        *data_x = clear_data;
                     }
                 }
             }
@@ -454,8 +440,8 @@ namespace dairin0d.Rendering.Octree2 {
             visibleObjects.Clear();
             
             foreach (var instance in ModelInstance.All) {
-                if (GeometryUtility.TestPlanesAABB(frustumPlanes, instance.BoundingBox)) {
-                    var pos = instance.transform.position;
+                if (GeometryUtility.TestPlanesAABB(frustumPlanes, instance.Bounds)) {
+                    var pos = instance.Bounds.center;
                     float sort_z = pos.x * vpMatrix.m20 + pos.y * vpMatrix.m21 + pos.z * vpMatrix.m22;
                     visibleObjects.Add((sort_z, instance));
                 }
@@ -490,7 +476,7 @@ namespace dairin0d.Rendering.Octree2 {
             
             foreach (var (sort_z, instance) in visibleObjects) {
                 var voxel_scale_matrix = Matrix4x4.Scale(Vector3.one * instance.Model.Bounds.size.z); // for now
-                var obj2world = instance.transform.localToWorldMatrix * voxel_scale_matrix;
+                var obj2world = instance.CachedTransform.localToWorldMatrix * voxel_scale_matrix;
                 var mvp_matrix = vpMatrix * obj2world;
                 mvp_matrix = depth_scale_matrix * mvp_matrix;
                 mvp_matrix.m03 -= subsampleOffset.x;
@@ -593,7 +579,7 @@ namespace dairin0d.Rendering.Octree2 {
         };
         int currentCacheIndex = 0;
         
-        public int MapShift = 5;
+        public int MapShift = 4;
         OctantMap octantMap = new OctantMap();
         
         public int MaxLevel = 0;
@@ -616,7 +602,7 @@ namespace dairin0d.Rendering.Octree2 {
         
         public int BlendFactor = 0;
         
-        public bool UsePoints = false;
+        public bool UsePoints = true;
         
         bool useSubsample;
         

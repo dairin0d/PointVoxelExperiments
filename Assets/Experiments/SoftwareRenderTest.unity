@@ -141,7 +141,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &139298009
 Transform:
   m_ObjectHideFlags: 0
@@ -427,7 +427,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   target: {fileID: 1352266891}
-  distance: 100
+  distance: 150
   xSpeed: 250
   ySpeed: 250
   yMinLimit: -85
@@ -613,7 +613,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   VSyncCount: 0
-  TargetFrameRate: 30
+  TargetFrameRate: 60
   RenderSize: 0
   DepthResolution: 24
   DepthDisplayShift: -1
@@ -684,7 +684,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &1123480845
 Transform:
   m_ObjectHideFlags: 0
@@ -980,7 +980,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/Cowboy.csv
+  Path: ../Datasets/CSV/MonkeyBI 90x65x55.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360

@@ -54,21 +54,20 @@ namespace dairin0d.Rendering.Octree2 {
 
     public class ModelCage {
         public Vector3[] Positions;
-        public int[] WeightCounts;
+        public byte[] WeightCounts;
         public ModelWeight[] Weights; // bindpose weights
     }
 
     public class ModelPoints {
-        public int[] WeightCounts;
+        public byte[] WeightCounts;
         public ModelWeight[] Weights; // cage weights
         public int[] Attributes; // indices in AttributeInfos
     }
 
     public class ModelPart {
-        // Note: if vertices are not specified, then this part is not bouned by a cage volume
-        // Otherwise, 4 (for tetrahedron) or 8 (for cube) vertices are expected
-        public int[] Vertices; // cage vertex indices
-        public int[] Corners; // cube corner indices
+        // Note: if vertices are not specified, then this part is not bounded by a cage volume
+        // Otherwise, 4 (for tetrahedron) or 8 (for cube) vertices are typically expected
+        public int[] Vertices; // cage vertex indices (corresponding to i-th cube corner)
         public int[] Geometries; // indices in Geometries (can be multiple if there are animation frames)
     }
 

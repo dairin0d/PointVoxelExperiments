@@ -26,46 +26,69 @@ using UnityEngine;
 
 namespace dairin0d.Rendering.Octree2 {
     public class ModelInstance : MonoBehaviour {
+        private static LinkedList<ModelInstance> allInstances = new LinkedList<ModelInstance>();
+        public static IEnumerable<ModelInstance> All => allInstances;
+
         public Model3D Model;
         public Transform[] Bones;
 
-        public Bounds BoundingBox {get; private set;} // in world space
+        private Bounds bounds;
+        public Bounds Bounds => bounds; // in world space
 
-        private static HashSet<ModelInstance> allInstances = new HashSet<ModelInstance>();
-        public static IEnumerable<ModelInstance> All => allInstances;
+        private Transform cachedTransform;
+        public Transform CachedTransform => cachedTransform;
 
-        void Start() {
-            
+        private LinkedListNode<ModelInstance> listNode;
+
+        private Model3D cachedModel;
+
+        void Awake() {
+            cachedTransform = transform;
         }
 
         void OnEnable() {
-            allInstances.Add(this);
+            listNode = allInstances.AddLast(this);
+            cachedModel = null;
+            bounds = default;
         }
 
         void OnDisable() {
-            allInstances.Remove(this);
+            allInstances.Remove(listNode);
+            cachedModel = null;
+            bounds = default;
         }
 
         void LateUpdate() {
-            if (Model == null) return;
+            if ((Model == cachedModel) && !cachedTransform.hasChanged) return;
             
-            var matrix = transform.localToWorldMatrix;
-            var center = Model.Bounds.center;
-            var extents = Model.Bounds.extents;
+            cachedModel = Model;
             
-            var bounds = new Bounds(matrix.MultiplyPoint3x4(center), Vector3.zero);
-            
-            for (int z = -1; z <= 1; z += 2) {
-                for (int y = -1; y <= 1; y += 2) {
-                    for (int x = -1; x <= 1; x += 2) {
-                        var p = center + Vector3.Scale(extents, new Vector3(x, y, z));
-                        p = matrix.MultiplyPoint3x4(p);
-                        bounds.Encapsulate(p);
-                    }
-                }
+            if (Model == null) {
+                bounds = default;
+                return;
             }
             
-            BoundingBox = bounds;
+            var matrix = cachedTransform.localToWorldMatrix;
+            var center = Model.Bounds.center;
+            var size = Model.Bounds.size;
+            
+            var newCenter = new Vector3 {
+                x = matrix.m00*center.x + matrix.m01*center.y + matrix.m02*center.z + matrix.m03,
+                y = matrix.m10*center.x + matrix.m11*center.y + matrix.m12*center.z + matrix.m13,
+                z = matrix.m20*center.x + matrix.m21*center.y + matrix.m22*center.z + matrix.m23,
+            };
+            
+            var X = new Vector3 {x = matrix.m00*size.x, y = matrix.m10*size.x, z = matrix.m20*size.x};
+            var Y = new Vector3 {x = matrix.m01*size.y, y = matrix.m11*size.y, z = matrix.m21*size.y};
+            var Z = new Vector3 {x = matrix.m02*size.z, y = matrix.m12*size.z, z = matrix.m22*size.z};
+            var newSize = new Vector3 {
+                x = (X.x < 0 ? -X.x : X.x) + (Y.x < 0 ? -Y.x : Y.x) + (Z.x < 0 ? -Z.x : Z.x),
+                y = (X.y < 0 ? -X.y : X.y) + (Y.y < 0 ? -Y.y : Y.y) + (Z.y < 0 ? -Z.y : Z.y),
+                z = (X.z < 0 ? -X.z : X.z) + (Y.z < 0 ? -Y.z : Y.z) + (Z.z < 0 ? -Z.z : Z.z),
+            };
+            
+            bounds = new Bounds(newCenter, newSize);
+            cachedTransform.hasChanged = false;
         }
     }
 }
