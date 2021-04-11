@@ -606,6 +606,8 @@ namespace dairin0d.Rendering.Octree2 {
         
         public bool UsePoints = true;
         
+        public float DistortionTolerance = 1;
+        
         int GeneralNodeCount;
         int AffineNodeCount;
         
@@ -746,6 +748,7 @@ namespace dairin0d.Rendering.Octree2 {
             sliderWidgets.Add(new Widget<float>("MapShift", () => MapShift, (value) => { MapShift = (int)value; }, OctantMap.MinShift, OctantMap.MaxShift));
             sliderWidgets.Add(new Widget<float>("DrawBias", () => DrawBias, (value) => { DrawBias = value; }, 0.25f, 4f));
             sliderWidgets.Add(new Widget<float>("Splat At", () => SplatAt, (value) => { SplatAt = (int)value; }, 1, 8));
+            sliderWidgets.Add(new Widget<float>("Distortion", () => DistortionTolerance, (value) => { DistortionTolerance = value; }, 0.25f, 8f));
             sliderWidgets.Add(new Widget<float>("BlendFactor", () => BlendFactor, (value) => { BlendFactor = (int)value; }, 0, 255));
 
             toggleWidgets.Add(new Widget<bool>("Use Stencil", () => UseStencil, (value) => { UseStencil = value; }));
@@ -1157,7 +1160,7 @@ namespace dairin0d.Rendering.Octree2 {
             distortion = ZMinY + ZMaxY; if (distortion < 0f) distortion = -distortion;
             if (distortion > maxDistortion) maxDistortion = distortion;
             
-            if (maxDistortion > 1f) return false;
+            if (maxDistortion > DistortionTolerance) return false;
             
             var TMinZ = projectedGrid[(int)GridVertex.MinMinMin].Position.z;
             var XMinZ = projectedGrid[(int)GridVertex.MaxMinMin].Position.z - TMinZ;
