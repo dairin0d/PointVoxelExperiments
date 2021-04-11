@@ -1032,7 +1032,7 @@ namespace dairin0d.Rendering.Octree2 {
                     var size = (sizeX > sizeY ? sizeX : sizeY);
                     if ((size < MaxAffineSize) && IsApproximatelyAffine(projectedGrid, ref matrix)) {
                         RenderAffine(ref context, ref matrix, maxLevel, loadAddress, parentColor, nodes, colors,
-                            readIndex, LoadNode, ref emptyIndices);
+                            readIndex, LoadNode, ref emptyIndices, parentOffset);
                         return;
                     }
                 }
@@ -1083,7 +1083,7 @@ namespace dairin0d.Rendering.Octree2 {
             matrix.m01 = Y.x; matrix.m11 = Y.y; matrix.m21 = Y.z;
             matrix.m02 = Z.x; matrix.m12 = Z.y; matrix.m22 = Z.z;
             int orderKey = OctantOrder.Key(in matrix);
-            var queue = context.queues[nodeMask];
+            var queue = context.queues[orderKey|nodeMask];
             
             // Process subnodes
             for (; queue != 0; queue >>= 4) {
@@ -1211,7 +1211,7 @@ namespace dairin0d.Rendering.Octree2 {
         
         unsafe void RenderAffine(ref Context context, ref Matrix4x4 matrix, int maxLevel,
             int loadAddress, Color32 parentColor, int* nodes, Color32* colors,
-            int readIndex, LoadFuncDelegate loadFunc, ref IndexCache8 emptyIndices)
+            int readIndex, LoadFuncDelegate loadFunc, ref IndexCache8 emptyIndices, int parentOffset = 0)
         {
             SetupAffine(ref context, in matrix, out int potShift,
                 out int centerX, out int centerY, out int extentX, out int extentY, out int startZ);
@@ -1250,7 +1250,7 @@ namespace dairin0d.Rendering.Octree2 {
             if (curr->state.x1 >= context.width) curr->state.x1 = context.width-1;
             if (curr->state.y1 >= context.height) curr->state.y1 = context.height-1;
             
-            curr->state.parentOffset = 0;
+            curr->state.parentOffset = parentOffset;
             curr->state.readIndex = readIndex;
             curr->state.loadAddress = loadAddress;
             curr->state.color = new Color24 {R=parentColor.r, G=parentColor.g, B=parentColor.b};
@@ -1291,9 +1291,9 @@ namespace dairin0d.Rendering.Octree2 {
                 traverse:;
                 
                 // Calculate base parent offset for this node's children
-                int parentOffset = context.writeIndex << 3;
-                var info8 = context.writeInfoCache + parentOffset;
-                var index8 = context.writeIndexCache + parentOffset;
+                int subParentOffset = context.writeIndex << 3;
+                var info8 = context.writeInfoCache + subParentOffset;
+                var index8 = context.writeIndexCache + subParentOffset;
                 var index8read = index8;
                 
                 // Write reference to this cached node in the parent
@@ -1352,7 +1352,7 @@ namespace dairin0d.Rendering.Octree2 {
                         curr->state.x1 = x1;
                         curr->state.y1 = y1;
                         
-                        curr->state.parentOffset = parentOffset | octant;
+                        curr->state.parentOffset = subParentOffset | octant;
                         curr->state.readIndex = (index8read[octant] << 8) | info8[octant].Mask;
                         curr->state.loadAddress = info8[octant].Address;
                         curr->state.color = info8[octant].Color;
