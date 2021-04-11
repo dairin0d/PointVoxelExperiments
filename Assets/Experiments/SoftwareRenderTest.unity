@@ -487,7 +487,7 @@ Camera:
     y: 0
     width: 1
     height: 1
-  near clip plane: 0.5
+  near clip plane: 0.125
   far clip plane: 500
   field of view: 60
   orthographic: 1
@@ -943,7 +943,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   Bones: []
   Frames: 
-  DistortionAmplitude: 0.25
+  DistortionAmplitude: 0.125
   DistortionSpeed: 0.5
 --- !u!1 &1352266890
 GameObject:
@@ -1073,7 +1073,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   Bones: []
   Frames: 
-  DistortionAmplitude: 0.25
+  DistortionAmplitude: 0.125
   DistortionSpeed: 0.5
 --- !u!1 &1442392330
 GameObject:

@@ -606,6 +606,9 @@ namespace dairin0d.Rendering.Octree2 {
         
         public bool UsePoints = true;
         
+        int GeneralNodeCount;
+        int AffineNodeCount;
+        
         struct ProjectedVertex {
             public Vector3 Position;
             public Vector3 Projection;
@@ -736,6 +739,8 @@ namespace dairin0d.Rendering.Octree2 {
         public void UpdateWidgets(List<Widget<string>> infoWidgets, List<Widget<float>> sliderWidgets, List<Widget<bool>> toggleWidgets) {
             infoWidgets.Add(new Widget<string>($"Cached={CacheCount}"));
             infoWidgets.Add(new Widget<string>($"Loaded={LoadedCount}"));
+            infoWidgets.Add(new Widget<string>($"General={GeneralNodeCount}"));
+            infoWidgets.Add(new Widget<string>($"Affine={AffineNodeCount}"));
 
             sliderWidgets.Add(new Widget<float>("Level", () => MaxLevel, (value) => { MaxLevel = (int)value; }, 0, 16));
             sliderWidgets.Add(new Widget<float>("MapShift", () => MapShift, (value) => { MapShift = (int)value; }, OctantMap.MinShift, OctantMap.MaxShift));
@@ -799,6 +804,8 @@ namespace dairin0d.Rendering.Octree2 {
 
             CacheCount = 0;
             LoadedCount = 0;
+            GeneralNodeCount = 0;
+            AffineNodeCount = 0;
             context.cache.targetCacheOffsets.Clear();
 
             octantMap.Resize(MapShift);
@@ -917,7 +924,7 @@ namespace dairin0d.Rendering.Octree2 {
             var parts = context.model.Parts;
             var frames = context.instance.Frames;
             
-            Matrix4x4 affineMatrix = default;
+            Matrix4x4 matrix = default;
             IndexCache8 emptyIndices = new IndexCache8 {n0=-1, n1=-1, n2=-1, n3=-1, n4=-1, n5=-1, n6=-1, n7=-1};
             
             foreach (var (minZ, partIndex) in sortedPartIndices) {
@@ -952,7 +959,7 @@ namespace dairin0d.Rendering.Octree2 {
                     
                     readIndex = (readIndex << 8) | mask;
                     
-                    RenderGeometry(ref context, projectedGrid, ref affineMatrix,
+                    RenderGeometry(ref context, projectedGrid, ref matrix,
                         readIndex, LoadNode, maxLevel, node, color, nodes, colors, ref emptyIndices);
                     
                     if (context.writeIndex > writeIndexStart) {
@@ -963,10 +970,12 @@ namespace dairin0d.Rendering.Octree2 {
         }
         
         unsafe void RenderGeometry(ref Context context, ProjectedVertex* projectedGrid,
-            ref Matrix4x4 affineMatrix, int readIndex, LoadFuncDelegate loadFunc,
+            ref Matrix4x4 matrix, int readIndex, LoadFuncDelegate loadFunc,
             int maxLevel, int loadAddress, Color32 parentColor, int* nodes, Color32* colors,
             ref IndexCache8 emptyIndices, int minY = 0, int parentOffset = 0)
         {
+            GeneralNodeCount++;
+            
             // Calculate screen bounds
             CalculateBounds(ref context, projectedGrid, out var boundsMin, out var boundsMax);
             
@@ -1021,13 +1030,10 @@ namespace dairin0d.Rendering.Octree2 {
                     var sizeX = boundsMax.x - boundsMin.x;
                     var sizeY = boundsMax.y - boundsMin.y;
                     var size = (sizeX > sizeY ? sizeX : sizeY);
-                    if ((size < MaxAffineSize) && IsApproximatelyAffine(projectedGrid, ref affineMatrix)) {
-                        // RenderPoints(context.buffer, context.width, context.height, context.bufferShift,
-                        //     context.queues, context.deltas, context.stack, context.map, context.xmap, context.ymap,
-                        //     in affineMatrix, maxLevel, loadAddress, parentColor, nodes, colors,
-                        //     context.readIndexCache, context.writeIndexCache, context.readInfoCache, context.writeInfoCache,
-                        //     readIndex, ref context.writeIndex, LoadNode);
-                        // return;
+                    if ((size < MaxAffineSize) && IsApproximatelyAffine(projectedGrid, ref matrix)) {
+                        RenderAffine(ref context, ref matrix, maxLevel, loadAddress, parentColor, nodes, colors,
+                            readIndex, LoadNode, ref emptyIndices);
+                        return;
                     }
                 }
             } else {
@@ -1073,10 +1079,10 @@ namespace dairin0d.Rendering.Octree2 {
             var X = projectedGrid[(int)GridVertex.MaxMidMid].Position - T;
             var Y = projectedGrid[(int)GridVertex.MidMaxMid].Position - T;
             var Z = projectedGrid[(int)GridVertex.MidMidMax].Position - T;
-            affineMatrix.m00 = X.x; affineMatrix.m10 = X.y; affineMatrix.m20 = X.z;
-            affineMatrix.m01 = Y.x; affineMatrix.m11 = Y.y; affineMatrix.m21 = Y.z;
-            affineMatrix.m02 = Z.x; affineMatrix.m12 = Z.y; affineMatrix.m22 = Z.z;
-            int orderKey = OctantOrder.Key(in affineMatrix);
+            matrix.m00 = X.x; matrix.m10 = X.y; matrix.m20 = X.z;
+            matrix.m01 = Y.x; matrix.m11 = Y.y; matrix.m21 = Y.z;
+            matrix.m02 = Z.x; matrix.m12 = Z.y; matrix.m22 = Z.z;
+            int orderKey = OctantOrder.Key(in matrix);
             var queue = context.queues[nodeMask];
             
             // Process subnodes
@@ -1096,7 +1102,7 @@ namespace dairin0d.Rendering.Octree2 {
                 }
                 
                 RenderGeometry(ref context, octantGrid,
-                    ref affineMatrix, octantReadIndex, loadFunc,
+                    ref matrix, octantReadIndex, loadFunc,
                     maxLevel-1, octantLoadAddress, octantColor, nodes, colors,
                     ref emptyIndices, minY, octantParentOffset);
             }
@@ -1162,17 +1168,17 @@ namespace dairin0d.Rendering.Octree2 {
             var YMaxZ = projectedGrid[(int)GridVertex.MaxMinMax].Position.z - TMaxZ;
             var ZMaxZ = projectedGrid[(int)GridVertex.MaxMaxMin].Position.z - TMaxZ;
             
-            matrix.m00 = (XMinX - XMaxX) * 0.25f;
-            matrix.m10 = (XMinY - XMaxY) * 0.25f;
-            matrix.m20 = (XMinZ - XMaxZ) * 0.25f;
+            matrix.m00 = (XMinX - XMaxX) * 0.5f;
+            matrix.m10 = (XMinY - XMaxY) * 0.5f;
+            matrix.m20 = (XMinZ - XMaxZ) * 0.5f;
             
-            matrix.m01 = (YMinX - YMaxX) * 0.25f;
-            matrix.m11 = (YMinY - YMaxY) * 0.25f;
-            matrix.m21 = (YMinZ - YMaxZ) * 0.25f;
+            matrix.m01 = (YMinX - YMaxX) * 0.5f;
+            matrix.m11 = (YMinY - YMaxY) * 0.5f;
+            matrix.m21 = (YMinZ - YMaxZ) * 0.5f;
             
-            matrix.m02 = (ZMinX - ZMaxX) * 0.25f;
-            matrix.m12 = (ZMinY - ZMaxY) * 0.25f;
-            matrix.m22 = (ZMinZ - ZMaxZ) * 0.25f;
+            matrix.m02 = (ZMinX - ZMaxX) * 0.5f;
+            matrix.m12 = (ZMinY - ZMaxY) * 0.5f;
+            matrix.m22 = (ZMinZ - ZMaxZ) * 0.5f;
             
             matrix.m03 = (TMinX + TMaxX) * 0.5f;
             matrix.m13 = (TMinY + TMaxY) * 0.5f;
@@ -1199,6 +1205,270 @@ namespace dairin0d.Rendering.Octree2 {
                     midpoint->Projection.z = context.pixelScale / midpoint->Position.z;
                     midpoint->Projection.x = midpoint->Position.x * midpoint->Projection.z;
                     midpoint->Projection.y = midpoint->Position.y * midpoint->Projection.z;
+                }
+            }
+        }
+        
+        unsafe void RenderAffine(ref Context context, ref Matrix4x4 matrix, int maxLevel,
+            int loadAddress, Color32 parentColor, int* nodes, Color32* colors,
+            int readIndex, LoadFuncDelegate loadFunc, ref IndexCache8 emptyIndices)
+        {
+            SetupAffine(ref context, in matrix, out int potShift,
+                out int centerX, out int centerY, out int extentX, out int extentY, out int startZ);
+            
+            if (maxLevel > potShift+1) maxLevel = potShift+1;
+            
+            int marginX = extentX >> (potShift+1);
+            int marginY = extentY >> (potShift+1);
+            
+            int forwardKey = OctantOrder.Key(in matrix);
+            int reverseKey = forwardKey ^ 0b11100000000;
+            uint* forwardQueues = context.queues + forwardKey;
+            uint* reverseQueues = context.queues + reverseKey;
+            
+            int bufMask = (1 << context.bufferShift) - 1;
+            int bufMaskInv = ~bufMask;
+            
+            int ignoreStencil = (UseStencil ? -1 : 0);
+            int blendFactor = BlendFactor;
+            int blendFactorInv = 255 - blendFactor;
+            bool updateCache = UpdateCache;
+            
+            int splatAt = SplatAt;
+            
+            var curr = context.stack + 1;
+            curr->state.depth = 1;
+            curr->state.x = centerX;
+            curr->state.y = centerY;
+            curr->state.z = startZ;
+            curr->state.x0 = (curr->state.x + SubpixelHalf - extentX) >> SubpixelShift;
+            curr->state.y0 = (curr->state.y + SubpixelHalf - extentY) >> SubpixelShift;
+            curr->state.x1 = (curr->state.x - SubpixelHalf + extentX) >> SubpixelShift;
+            curr->state.y1 = (curr->state.y - SubpixelHalf + extentY) >> SubpixelShift;
+            if (curr->state.x0 < 0) curr->state.x0 = 0;
+            if (curr->state.y0 < 0) curr->state.y0 = 0;
+            if (curr->state.x1 >= context.width) curr->state.x1 = context.width-1;
+            if (curr->state.y1 >= context.height) curr->state.y1 = context.height-1;
+            
+            curr->state.parentOffset = 0;
+            curr->state.readIndex = readIndex;
+            curr->state.loadAddress = loadAddress;
+            curr->state.color = new Color24 {R=parentColor.r, G=parentColor.g, B=parentColor.b};
+            
+            {
+                var state = curr->state;
+                for (int y = state.y0; y <= state.y1; y++) {
+                    var bufY = context.buffer + (y << context.bufferShift);
+                    for (int x = state.x0; x <= state.x1; x++) {
+                        bufY[x].id += 1;
+                        bufY[x].stencil = 0;
+                    }
+                }
+            }
+            
+            while (curr > context.stack) {
+                AffineNodeCount++;
+                
+                var state = curr->state;
+                --curr;
+                
+                int nodeMask = state.readIndex & 0xFF;
+                
+                int lastY = state.y0;
+                
+                // Occlusion test
+                for (int y = state.y0; y <= state.y1; y++) {
+                    var bufY = context.buffer + (y << context.bufferShift);
+                    for (int x = state.x0; x <= state.x1; x++) {
+                        bufY[x].id += 1;
+                        if ((state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
+                            lastY = y;
+                            goto traverse;
+                        }
+                    }
+                }
+                continue;
+                traverse:;
+                
+                // Calculate base parent offset for this node's children
+                int parentOffset = context.writeIndex << 3;
+                var info8 = context.writeInfoCache + parentOffset;
+                var index8 = context.writeIndexCache + parentOffset;
+                var index8read = index8;
+                
+                // Write reference to this cached node in the parent
+                context.writeIndexCache[state.parentOffset] = context.writeIndex;
+                
+                // Clear the cached node references
+                *((IndexCache8*)index8) = emptyIndices;
+                
+                if (state.readIndex < 0) {
+                    loadFunc(state.loadAddress, info8, nodes, colors);
+                    LoadedCount++;
+                } else {
+                    int _readIndex = state.readIndex >> 8;
+                    index8read = context.readIndexCache + (_readIndex << 3);
+                    *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[_readIndex];
+                }
+                
+                context.writeIndex += 1;
+                
+                ///////////////////////////////////////////
+                
+                bool sizeCondition = (state.x1-state.x0 < splatAt) & (state.y1-state.y0 < splatAt);
+                bool shouldDraw = (state.depth >= maxLevel) | sizeCondition;
+                shouldDraw |= !updateCache & (state.readIndex < 0);
+                
+                if (!shouldDraw) {
+                    var queue = reverseQueues[nodeMask];
+                    
+                    int subExtentX = (extentX >> state.depth) - SubpixelHalf;
+                    int subExtentY = (extentY >> state.depth) - SubpixelHalf;
+                    
+                    for (; queue != 0; queue >>= 4) {
+                        int octant = unchecked((int)(queue & 7));
+                        
+                        int x = state.x + (deltas[octant].x >> state.depth);
+                        int y = state.y + (deltas[octant].y >> state.depth);
+                        
+                        int x0 = (x - subExtentX) >> SubpixelShift;
+                        int y0 = (y - subExtentY) >> SubpixelShift;
+                        int x1 = (x + subExtentX) >> SubpixelShift;
+                        int y1 = (y + subExtentY) >> SubpixelShift;
+                        x0 = (x0 < state.x0 ? state.x0 : x0);
+                        y0 = (y0 < lastY ? lastY : y0);
+                        x1 = (x1 > state.x1 ? state.x1 : x1);
+                        y1 = (y1 > state.y1 ? state.y1 : y1);
+                        
+                        if ((x0 > x1) | (y0 > y1)) continue;
+                        
+                        ++curr;
+                        curr->state.depth = state.depth+1;
+                        curr->state.x = x;
+                        curr->state.y = y;
+                        curr->state.z = state.z + (deltas[octant].z >> state.depth);
+                        curr->state.x0 = x0;
+                        curr->state.y0 = y0;
+                        curr->state.x1 = x1;
+                        curr->state.y1 = y1;
+                        
+                        curr->state.parentOffset = parentOffset | octant;
+                        curr->state.readIndex = (index8read[octant] << 8) | info8[octant].Mask;
+                        curr->state.loadAddress = info8[octant].Address;
+                        curr->state.color = info8[octant].Color;
+                    }
+                } else {
+                    int mapHalf = 1 << (SubpixelShift + potShift - state.depth);
+                    int toMapShift = (SubpixelShift + potShift - state.depth + 1) - octantMap.SizeShift;
+                    int sx0 = (state.x0 << SubpixelShift) + SubpixelHalf - (state.x - mapHalf);
+                    int sy0 = (state.y0 << SubpixelShift) + SubpixelHalf - (state.y - mapHalf);
+                    
+                    for (int y = state.y0, my = sy0; y <= state.y1; y++, my += SubpixelSize) {
+                        var bufY = context.buffer + (y << context.bufferShift);
+                        int maskY = context.ymap[my >> toMapShift] & nodeMask;
+                        for (int x = state.x0, mx = sx0; x <= state.x1; x++, mx += SubpixelSize) {
+                            int mask = context.xmap[mx >> toMapShift] & maskY;
+                            if ((mask != 0) & (state.z < bufY[x].depth) & ((bufY[x].stencil & ignoreStencil) == 0)) {
+                                int octant = unchecked((int)(forwardQueues[mask] & 7));
+                                int z = state.z + (deltas[octant].z >> state.depth);
+                                bufY[x].id += 1;
+                                if (z < bufY[x].depth) {
+                                    var color24 = info8[octant].Color;
+                                    bufY[x].color = new Color32 {
+                                        // r = color24.R,
+                                        // g = color24.G,
+                                        // b = color24.B,
+                                        r = (byte)((color24.R * blendFactorInv + state.color.R * blendFactor + 255) >> 8),
+                                        g = (byte)((color24.G * blendFactorInv + state.color.G * blendFactor + 255) >> 8),
+                                        b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
+                                        a = 255
+                                    };
+                                    bufY[x].depth = z;
+                                    bufY[x].stencil = 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        void SetupAffine(ref Context context, in Matrix4x4 matrix, out int potShift,
+            out int Cx, out int Cy, out int extentX, out int extentY, out int minZ)
+        {
+            var X = new Vector3 {x = matrix.m00, y = matrix.m10, z = matrix.m20};
+            var Y = new Vector3 {x = matrix.m01, y = matrix.m11, z = matrix.m21};
+            var Z = new Vector3 {x = matrix.m02, y = matrix.m12, z = matrix.m22};
+            var T = new Vector3 {x = matrix.m03, y = matrix.m13, z = matrix.m23};
+            
+            float maxSpan = 0.5f * CalculateMaxGap(X.x, X.y, Y.x, Y.y, Z.x, Z.y) * DrawBias;
+            
+            // Power-of-two bounding square
+            potShift = 0;
+            for (int potSize = 1 << potShift; (potSize < maxSpan) & (potShift <= 30); potShift++, potSize <<= 1);
+            
+            int potShiftDelta = SubpixelShift - potShift;
+            float potScale = (potShiftDelta >= 0 ? (1 << potShiftDelta) : 1f / (1 << -potShiftDelta));
+            
+            int Xx = (int)(X.x*potScale);
+            int Xy = (int)(X.y*potScale);
+            int Yx = (int)(Y.x*potScale);
+            int Yy = (int)(Y.y*potScale);
+            int Zx = (int)(Z.x*potScale);
+            int Zy = (int)(Z.y*potScale);
+            
+            int maxGap = CalculateMaxGap(Xx, Xy, Yx, Yy, Zx, Zy);
+            if (maxGap > SubpixelSize) {
+                potShift++;
+                potShiftDelta = SubpixelShift - potShift;
+                Xx >>= 1; Xy >>= 1;
+                Yx >>= 1; Yy >>= 1;
+                Zx >>= 1; Zy >>= 1;
+            }
+            
+            octantMap.Bake(Xx >> 1, Xy >> 1, Yx >> 1, Yy >> 1, Zx >> 1, Zy >> 1, SubpixelHalf, SubpixelHalf, SubpixelShift);
+            // octantMap.Bake(Xx, Xy, Yx, Yy, Zx, Zy, SubpixelHalf, SubpixelHalf, SubpixelShift);
+            
+            Xx <<= potShift; Xy <<= potShift;
+            Yx <<= potShift; Yy <<= potShift;
+            Zx <<= potShift; Zy <<= potShift;
+            Xx >>= 1; Xy >>= 1;
+            Yx >>= 1; Yy >>= 1;
+            Zx >>= 1; Zy >>= 1;
+            
+            extentX = (Xx < 0 ? -Xx : Xx) + (Yx < 0 ? -Yx : Yx) + (Zx < 0 ? -Zx : Zx);
+            extentY = (Xy < 0 ? -Xy : Xy) + (Yy < 0 ? -Yy : Yy) + (Zy < 0 ? -Zy : Zy);
+            
+            T.x += context.xCenter;
+            T.y += context.yCenter;
+            
+            float coordScale = 1 << SubpixelShift;
+            int Tx = (int)(T.x*coordScale + 0.5f);
+            int Ty = (int)(T.y*coordScale + 0.5f);
+            Cx = Tx;
+            Cy = Ty;
+            
+            X.z *= context.depthScale;
+            Y.z *= context.depthScale;
+            Z.z *= context.depthScale;
+            T.z = (T.z - context.zNear) * context.depthScale;
+            
+            int Xz = ((int)X.z) >> 1;
+            int Yz = ((int)Y.z) >> 1;
+            int Zz = ((int)Z.z) >> 1;
+            int Tz = ((int)T.z);
+            int extentZ = (Xz < 0 ? -Xz : Xz) + (Yz < 0 ? -Yz : Yz) + (Zz < 0 ? -Zz : Zz);
+            minZ = Tz - extentZ;
+            
+            int octant = 0;
+            for (int subZ = -1; subZ <= 1; subZ += 2) {
+                for (int subY = -1; subY <= 1; subY += 2) {
+                    for (int subX = -1; subX <= 1; subX += 2) {
+                        deltas[octant].x = (Xx * subX + Yx * subY + Zx * subZ);
+                        deltas[octant].y = (Xy * subX + Yy * subY + Zy * subZ);
+                        deltas[octant].z = (Xz * subX + Yz * subY + Zz * subZ) + extentZ;
+                        ++octant;
+                    }
                 }
             }
         }
