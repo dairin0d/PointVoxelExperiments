@@ -45,6 +45,7 @@ namespace dairin0d.Rendering.Octree2 {
         public string Name;
         public int Parent; // index in Bones
         public Matrix4x4 Bindpose;
+        public Matrix4x4 BindposeInverted;
     }
 
     public struct ModelWeight {

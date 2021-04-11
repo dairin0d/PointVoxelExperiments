@@ -256,9 +256,6 @@ namespace dairin0d.Rendering.Octree2 {
         int cullingMask;
         CameraClearFlags clearFlags;
 
-        Matrix4x4 vpMatrix;
-        Plane[] frustumPlanes;
-
         public int RenderSize = 0;
         Buffer buffer;
 
@@ -420,29 +417,15 @@ namespace dairin0d.Rendering.Octree2 {
             splatter.UpdateWidgets(InfoWidgets, SliderWidgets, ToggleWidgets);
         }
 
-        void UpdateCameraInfo() {
-            int w = buffer.Width, h = buffer.Height;
-
-            // vp_matrix = cam.projectionMatrix * cam.worldToCameraMatrix;
-            // vp_matrix = Matrix4x4.Scale(new Vector3(w * 0.5f, h * 0.5f, 1)) * vp_matrix;
-            // vp_matrix = Matrix4x4.Translate(new Vector3(w * 0.5f, h * 0.5f, 0f)) * vp_matrix;
-
-            float ah = cam.orthographicSize;
-            float aw = (ah * w) / h;
-            vpMatrix = cam.worldToCameraMatrix;
-            vpMatrix = Matrix4x4.Scale(new Vector3(w * 0.5f / aw, h * 0.5f / ah, -1)) * vpMatrix;
-            vpMatrix = Matrix4x4.Translate(new Vector3(w * 0.5f, h * 0.5f, 0f)) * vpMatrix;
-
-            frustumPlanes = GeometryUtility.CalculateFrustumPlanes(cam);
-        }
-
-        void CollectRenderers() {
+        void CollectRenderers(Matrix4x4 viewMatrix) {
+            var frustumPlanes = GeometryUtility.CalculateFrustumPlanes(cam);
+            
             visibleObjects.Clear();
             
             foreach (var instance in ModelInstance.All) {
                 if (GeometryUtility.TestPlanesAABB(frustumPlanes, instance.Bounds)) {
                     var pos = instance.Bounds.center;
-                    float sort_z = pos.x * vpMatrix.m20 + pos.y * vpMatrix.m21 + pos.z * vpMatrix.m22;
+                    float sort_z = pos.x * viewMatrix.m20 + pos.y * viewMatrix.m21 + pos.z * viewMatrix.m22;
                     visibleObjects.Add((sort_z, instance));
                 }
             }
@@ -453,37 +436,52 @@ namespace dairin0d.Rendering.Octree2 {
         }
 
         void RenderMain() {
-            UpdateCameraInfo();
-            CollectRenderers();
-
+            // Note: Unity's camera space matches OpenGL convention (forward is -Z)
+            var viewMatrix = Matrix4x4.Scale(new Vector3(1, 1, -1)) * cam.worldToCameraMatrix;
+            
+            CollectRenderers(viewMatrix);
+            
             buffer.RenderStart(cam.backgroundColor);
             
-            splatter.RenderObjects(buffer, IterateInstances());
+            splatter.RenderObjects(buffer, cam, EnumerateInstances());
+            
+            // float ah = cam.orthographicSize;
+            // float aw = (ah * w) / h;
+            // var vpMatrix = Matrix4x4.Scale(new Vector3(w * 0.5f / aw, h * 0.5f / ah, -1)) * viewMatrix;
+            // vpMatrix = Matrix4x4.Translate(new Vector3(w * 0.5f, h * 0.5f, 0f)) * vpMatrix;
+            
+            // splatter.RenderObjects(buffer, IterateInstances(vpMatrix));
             
             buffer.RenderEnd(DepthDisplayShift);
         }
         
-        IEnumerable<(ModelInstance, Matrix4x4, int)> IterateInstances() {
-            float depth_scale = (1 << DepthResolution) / (cam.farClipPlane - cam.nearClipPlane);
-            var depth_scale_matrix = Matrix4x4.Scale(new Vector3(1, 1, depth_scale));
-            
-            Vector2 subsampleOffset = default;
-            if (buffer.Subsample) {
-                Subsampler.Get(out int subsampleX, out int subsampleY);
-                subsampleOffset.x = (subsampleX - 0.5f) * 0.5f;
-                subsampleOffset.y = (subsampleY - 0.5f) * 0.5f;
-            }
-            
+        IEnumerable<ModelInstance> EnumerateInstances() {
             foreach (var (sort_z, instance) in visibleObjects) {
-                var voxel_scale_matrix = Matrix4x4.Scale(Vector3.one * instance.Model.Bounds.size.z); // for now
-                var obj2world = instance.CachedTransform.localToWorldMatrix * voxel_scale_matrix;
-                var mvp_matrix = vpMatrix * obj2world;
-                mvp_matrix = depth_scale_matrix * mvp_matrix;
-                mvp_matrix.m03 -= subsampleOffset.x;
-                mvp_matrix.m13 -= subsampleOffset.y;
-                yield return (instance, mvp_matrix, 0); // for now
+                yield return instance;
             }
         }
+        
+        // IEnumerable<(ModelInstance, Matrix4x4, int)> IterateInstances(Matrix4x4 vpMatrix) {
+        //     float depth_scale = (1 << DepthResolution) / (cam.farClipPlane - cam.nearClipPlane);
+        //     var depth_scale_matrix = Matrix4x4.Scale(new Vector3(1, 1, depth_scale));
+            
+        //     Vector2 subsampleOffset = default;
+        //     if (buffer.Subsample) {
+        //         Subsampler.Get(out int subsampleX, out int subsampleY);
+        //         subsampleOffset.x = (subsampleX - 0.5f) * 0.5f;
+        //         subsampleOffset.y = (subsampleY - 0.5f) * 0.5f;
+        //     }
+            
+        //     foreach (var (sort_z, instance) in visibleObjects) {
+        //         var voxel_scale_matrix = Matrix4x4.Scale(Vector3.one * instance.Model.Bounds.size.z); // for now
+        //         var obj2world = instance.CachedTransform.localToWorldMatrix * voxel_scale_matrix;
+        //         var mvp_matrix = vpMatrix * obj2world;
+        //         mvp_matrix = depth_scale_matrix * mvp_matrix;
+        //         mvp_matrix.m03 -= subsampleOffset.x;
+        //         mvp_matrix.m13 -= subsampleOffset.y;
+        //         yield return (instance, mvp_matrix, 0); // for now
+        //     }
+        // }
     }
     
     public struct NodeInfo {
@@ -519,6 +517,8 @@ namespace dairin0d.Rendering.Octree2 {
         const int SubpixelMaskInv = ~SubpixelMask;
         const int SubpixelHalf = SubpixelSize >> 1;
         
+        const int DepthResolution = 24;
+        
         struct Delta {
             public int x, y, z, pad0;
             public int x0, y0, x1, y1;
@@ -553,8 +553,8 @@ namespace dairin0d.Rendering.Octree2 {
             public int[] indexCache1;
             public NodeInfo[] infoCache0;
             public NodeInfo[] infoCache1;
-            public Dictionary<(ModelInstance, int, int), int> sourceCacheOffsets = new Dictionary<(ModelInstance, int, int), int>();
-            public Dictionary<(ModelInstance, int, int), int> targetCacheOffsets = new Dictionary<(ModelInstance, int, int), int>();
+            public Dictionary<(ModelInstance, Model3D, int, int), int> sourceCacheOffsets;
+            public Dictionary<(ModelInstance, Model3D, int, int), int> targetCacheOffsets;
             
             public NodeCache(int count) {
                 int size = count * 8;
@@ -562,6 +562,8 @@ namespace dairin0d.Rendering.Octree2 {
                 indexCache1 = new int[size];
                 infoCache0 = new NodeInfo[size];
                 infoCache1 = new NodeInfo[size];
+                sourceCacheOffsets = new Dictionary<(ModelInstance, Model3D, int, int), int>();
+                targetCacheOffsets = new Dictionary<(ModelInstance, Model3D, int, int), int>();
             }
             
             public void Swap() {
@@ -604,16 +606,136 @@ namespace dairin0d.Rendering.Octree2 {
         
         public bool UsePoints = true;
         
-        bool useSubsample;
+        struct ProjectedVertex {
+            public Vector3 Position;
+            public Vector3 Projection;
+        }
+        // Cage vertices, 3x3x3-grid vertices... 16k should probably be more than enough
+        ProjectedVertex[] projectedVertices = new ProjectedVertex[1 << 14];
+        
+        enum GridVertex {
+            MinMinMin, MidMinMin, MaxMinMin,
+            MinMidMin, MidMidMin, MaxMidMin,
+            MinMaxMin, MidMaxMin, MaxMaxMin,
+            
+            MinMinMid, MidMinMid, MaxMinMid,
+            MinMidMid, MidMidMid, MaxMidMid,
+            MinMaxMid, MidMaxMid, MaxMaxMid,
+            
+            MinMinMax, MidMinMax, MaxMinMax,
+            MinMidMax, MidMidMax, MaxMidMax,
+            MinMaxMax, MidMaxMax, MaxMaxMax,
+        }
+        
+        const int GridVertexCount = 3*3*3;
+        const int GridCornersCount = 2*2*2;
+        const int GridNonCornersCount = GridVertexCount - GridCornersCount;
+        
+        static readonly int[] GridCornerIndices = new int[] {
+            (int)GridVertex.MinMinMin,
+            (int)GridVertex.MaxMinMin,
+            (int)GridVertex.MinMaxMin,
+            (int)GridVertex.MaxMaxMin,
+            (int)GridVertex.MinMinMax,
+            (int)GridVertex.MaxMinMax,
+            (int)GridVertex.MinMaxMax,
+            (int)GridVertex.MaxMaxMax,
+        };
+        
+        static readonly int[] GridSubdivisionIndices = new int[] {
+            // X edges
+            (int)GridVertex.MinMinMin, (int)GridVertex.MaxMinMin, (int)GridVertex.MidMinMin,
+            (int)GridVertex.MinMaxMin, (int)GridVertex.MaxMaxMin, (int)GridVertex.MidMaxMin,
+            (int)GridVertex.MinMinMax, (int)GridVertex.MaxMinMax, (int)GridVertex.MidMinMax,
+            (int)GridVertex.MinMaxMax, (int)GridVertex.MaxMaxMax, (int)GridVertex.MidMaxMax,
+            
+            // Y edges
+            (int)GridVertex.MinMinMin, (int)GridVertex.MinMaxMin, (int)GridVertex.MinMidMin,
+            (int)GridVertex.MaxMinMin, (int)GridVertex.MaxMaxMin, (int)GridVertex.MaxMidMin,
+            (int)GridVertex.MinMinMax, (int)GridVertex.MinMaxMax, (int)GridVertex.MinMidMax,
+            (int)GridVertex.MaxMinMax, (int)GridVertex.MaxMaxMax, (int)GridVertex.MaxMidMax,
+            
+            // Z edges
+            (int)GridVertex.MinMinMin, (int)GridVertex.MinMinMax, (int)GridVertex.MinMinMid,
+            (int)GridVertex.MaxMinMin, (int)GridVertex.MaxMinMax, (int)GridVertex.MaxMinMid,
+            (int)GridVertex.MinMaxMin, (int)GridVertex.MinMaxMax, (int)GridVertex.MinMaxMid,
+            (int)GridVertex.MaxMaxMin, (int)GridVertex.MaxMaxMax, (int)GridVertex.MaxMaxMid,
+            
+            // Faces
+            (int)GridVertex.MinMidMin, (int)GridVertex.MaxMidMin, (int)GridVertex.MidMidMin,
+            (int)GridVertex.MinMinMid, (int)GridVertex.MaxMinMid, (int)GridVertex.MidMinMid,
+            (int)GridVertex.MinMinMid, (int)GridVertex.MinMaxMid, (int)GridVertex.MinMidMid,
+            (int)GridVertex.MaxMinMid, (int)GridVertex.MaxMaxMid, (int)GridVertex.MaxMidMid,
+            (int)GridVertex.MinMaxMid, (int)GridVertex.MaxMaxMid, (int)GridVertex.MidMaxMid,
+            (int)GridVertex.MinMidMax, (int)GridVertex.MaxMidMax, (int)GridVertex.MidMidMax,
+            
+            // Center
+            (int)GridVertex.MinMidMid, (int)GridVertex.MaxMidMid, (int)GridVertex.MidMidMid,
+        };
+        
+        static readonly int[] SubgridCornerIndices = new int[] {
+            (int)GridVertex.MinMinMin, (int)GridVertex.MidMinMin, (int)GridVertex.MinMidMin, (int)GridVertex.MidMidMin,
+            (int)GridVertex.MinMinMid, (int)GridVertex.MidMinMid, (int)GridVertex.MinMidMid, (int)GridVertex.MidMidMid,
+            
+            (int)GridVertex.MidMinMin, (int)GridVertex.MaxMinMin, (int)GridVertex.MidMidMin, (int)GridVertex.MaxMidMin,
+            (int)GridVertex.MidMinMid, (int)GridVertex.MaxMinMid, (int)GridVertex.MidMidMid, (int)GridVertex.MaxMidMid,
+            
+            (int)GridVertex.MinMidMin, (int)GridVertex.MidMidMin, (int)GridVertex.MinMaxMin, (int)GridVertex.MidMaxMin,
+            (int)GridVertex.MinMidMid, (int)GridVertex.MidMidMid, (int)GridVertex.MinMaxMid, (int)GridVertex.MidMaxMid,
+            
+            (int)GridVertex.MidMidMin, (int)GridVertex.MaxMidMin, (int)GridVertex.MidMaxMin, (int)GridVertex.MaxMaxMin,
+            (int)GridVertex.MidMidMid, (int)GridVertex.MaxMidMid, (int)GridVertex.MidMaxMid, (int)GridVertex.MaxMaxMid,
+            
+            (int)GridVertex.MinMinMid, (int)GridVertex.MidMinMid, (int)GridVertex.MinMidMid, (int)GridVertex.MidMidMid,
+            (int)GridVertex.MinMinMax, (int)GridVertex.MidMinMax, (int)GridVertex.MinMidMax, (int)GridVertex.MidMidMax,
+            
+            (int)GridVertex.MidMinMid, (int)GridVertex.MaxMinMid, (int)GridVertex.MidMidMid, (int)GridVertex.MaxMidMid,
+            (int)GridVertex.MidMinMax, (int)GridVertex.MaxMinMax, (int)GridVertex.MidMidMax, (int)GridVertex.MaxMidMax,
+            
+            (int)GridVertex.MinMidMid, (int)GridVertex.MidMidMid, (int)GridVertex.MinMaxMid, (int)GridVertex.MidMaxMid,
+            (int)GridVertex.MinMidMax, (int)GridVertex.MidMidMax, (int)GridVertex.MinMaxMax, (int)GridVertex.MidMaxMax,
+            
+            (int)GridVertex.MidMidMid, (int)GridVertex.MaxMidMid, (int)GridVertex.MidMaxMid, (int)GridVertex.MaxMaxMid,
+            (int)GridVertex.MidMidMax, (int)GridVertex.MaxMidMax, (int)GridVertex.MidMaxMax, (int)GridVertex.MaxMaxMax,
+            
+        };
+        
+        List<(float, int)> sortedPartIndices = new List<(float, int)>(256);
+        
+        unsafe struct Context {
+            public Buffer.DataItem* buffer;
+            public uint* queues;
+            public Delta* deltas;
+            public StackEntry* stack;
+            public byte* map;
+            public byte* xmap;
+            public byte* ymap;
+            public int* readIndexCache;
+            public int* writeIndexCache;
+            public NodeInfo* readInfoCache;
+            public NodeInfo* writeInfoCache;
+            public int* gridCornerIndices;
+            public int* gridSubdivisionIndices;
+            public int* subgridCornerIndices;
+            public ProjectedVertex* projectedVertices;
+            public ProjectedVertex* projectedPartCorners;
+            public ProjectedVertex* projectedGridsStack;
+            public ModelInstance instance;
+            public Model3D model;
+            public NodeCache cache;
+            public int width, height, bufferShift;
+            public float xCenter, yCenter, pixelScale;
+            public float xMin, yMin, xMax, yMax; // in clip space
+            public float zNear, zFar, depthScale;
+            public bool isOrthographic;
+            public int currentFrame;
+            public int writeIndex;
+            public int partIndex, geometryIndex;
+        }
         
         public void UpdateWidgets(List<Widget<string>> infoWidgets, List<Widget<float>> sliderWidgets, List<Widget<bool>> toggleWidgets) {
-            // infoWidgets.Add(new Widget<string>($"PixelCount={PixelCount}"));
-            // infoWidgets.Add(new Widget<string>($"QuadCount={QuadCount}"));
-            // infoWidgets.Add(new Widget<string>($"CulledCount={CulledCount}"));
-            // infoWidgets.Add(new Widget<string>($"OccludedCount={OccludedCount}"));
-            // infoWidgets.Add(new Widget<string>($"NodeCount={NodeCount}"));
-            infoWidgets.Add(new Widget<string>($"CacheCount={CacheCount}"));
-            infoWidgets.Add(new Widget<string>($"LoadedCount={LoadedCount}"));
+            infoWidgets.Add(new Widget<string>($"Cached={CacheCount}"));
+            infoWidgets.Add(new Widget<string>($"Loaded={LoadedCount}"));
 
             sliderWidgets.Add(new Widget<float>("Level", () => MaxLevel, (value) => { MaxLevel = (int)value; }, 0, 16));
             sliderWidgets.Add(new Widget<float>("MapShift", () => MapShift, (value) => { MapShift = (int)value; }, OctantMap.MinShift, OctantMap.MaxShift));
@@ -629,15 +751,460 @@ namespace dairin0d.Rendering.Octree2 {
             toggleWidgets.Add(new Widget<bool>("Update Cache", () => UpdateCache, (value) => { UpdateCache = value; }));
         }
         
-        public unsafe void RenderObjects(Buffer buffer, IEnumerable<(ModelInstance, Matrix4x4, int)> instances) {
-            // PixelCount = 0;
-            // QuadCount = 0;
-            // CulledCount = 0;
-            // OccludedCount = 0;
-            // NodeCount = 0;
+        public unsafe void RenderObjects(Buffer buffer, Camera camera, IEnumerable<ModelInstance> instances) {
+            float halfWidth = buffer.Width * 0.5f, halfHeight = buffer.Height * 0.5f;
             
-            useSubsample = buffer.Subsample;
-            if (useSubsample) {
+            var context = new Context();
+            
+            context.width = buffer.Width;
+            context.height = buffer.Height;
+            context.bufferShift = buffer.TileShift;
+            
+            Vector2 subsampleOffset = default;
+            if (buffer.Subsample) {
+                Subsampler.Get(out int subsampleX, out int subsampleY);
+                subsampleOffset.x = (0.5f - subsampleX) * 0.5f;
+                subsampleOffset.y = (0.5f - subsampleY) * 0.5f;
+            }
+            
+            context.xCenter = halfWidth + subsampleOffset.x;
+            context.yCenter = halfHeight + subsampleOffset.y;
+            
+            var aperture = camera.orthographic ? camera.orthographicSize : Mathf.Tan(Mathf.Deg2Rad * camera.fieldOfView * 0.5f);
+            context.pixelScale = halfHeight / aperture;
+            
+            const float BorderMargin = 0.0001f;
+            context.xMin = -halfWidth + subsampleOffset.x + BorderMargin;
+            context.yMin = -halfHeight + subsampleOffset.y + BorderMargin;
+            context.xMax = halfWidth + subsampleOffset.x - BorderMargin;
+            context.yMax = halfHeight + subsampleOffset.y - BorderMargin;
+            
+            context.zNear = camera.nearClipPlane * context.pixelScale;
+            context.zFar = camera.farClipPlane * context.pixelScale;
+            context.depthScale = (1 << DepthResolution) / (context.zFar - context.zNear);
+            
+            context.isOrthographic = camera.orthographic;
+            
+            context.currentFrame = Time.frameCount;
+            
+            // Note: Unity's camera space matches OpenGL convention (forward is -Z)
+            var viewMatrix = Matrix4x4.Scale(new Vector3(1, 1, -1) * context.pixelScale) * camera.worldToCameraMatrix;
+            
+            ////////////////////////////////////////////////////////////
+            
+            if (buffer.Subsample) {
+                currentCacheIndex = context.currentFrame & 0b11;
+            }
+            context.cache = caches[currentCacheIndex];
+
+            CacheCount = 0;
+            LoadedCount = 0;
+            context.cache.targetCacheOffsets.Clear();
+
+            octantMap.Resize(MapShift);
+
+            // The zeroth element is used for "writing cached parent reference" of root nodes
+            // (the value is not used, this just avoids extra checks)
+            context.writeIndex = 2;
+
+            fixed (Buffer.DataItem* buf = buffer.Data)
+            fixed (uint* queues = OctantOrder.Queues)
+            fixed (Delta* deltas = this.deltas)
+            fixed (StackEntry* stack = this.stack)
+            fixed (byte* map = octantMap.Data)
+            fixed (byte* xmap = octantMap.DataX)
+            fixed (byte* ymap = octantMap.DataY)
+            fixed (int* readIndexCache = context.cache.indexCache0)
+            fixed (int* writeIndexCache = context.cache.indexCache1)
+            fixed (NodeInfo* readInfoCache = context.cache.infoCache0)
+            fixed (NodeInfo* writeInfoCache = context.cache.infoCache1)
+            fixed (int* gridCornerIndices = GridCornerIndices)
+            fixed (int* gridSubdivisionIndices = GridSubdivisionIndices)
+            fixed (int* subgridCornerIndices = SubgridCornerIndices)
+            fixed (ProjectedVertex* projectedVertices = this.projectedVertices)
+            {
+                context.buffer = buf;
+                context.queues = queues;
+                context.deltas = deltas;
+                context.stack = stack;
+                context.map = map;
+                context.xmap = xmap;
+                context.ymap = ymap;
+                context.readIndexCache = readIndexCache;
+                context.writeIndexCache = writeIndexCache;
+                context.readInfoCache = readInfoCache;
+                context.writeInfoCache = writeInfoCache;
+                context.gridCornerIndices = gridCornerIndices;
+                context.gridSubdivisionIndices = gridSubdivisionIndices;
+                context.subgridCornerIndices = subgridCornerIndices;
+                context.projectedVertices = projectedVertices;
+                context.projectedPartCorners = projectedVertices;
+                context.projectedGridsStack = projectedVertices;
+                
+                foreach (var instance in instances) {
+                    context.instance = instance;
+                    context.model = instance.Model;
+                    
+                    var modelViewMatrix = viewMatrix * instance.CachedTransform.localToWorldMatrix;
+                    
+                    // TODO: occlusion test with the whole model's bounds?
+                    // (probably makes sense only if the model has more than a few parts)
+                    
+                    ProjectCageVertices(ref context, ref modelViewMatrix);
+                    SetupParts(ref context);
+                    RenderParts(ref context);
+                }
+            }
+            
+            CacheCount = context.writeIndex;
+            
+            context.cache.Swap();
+        }
+        
+        unsafe void ProjectCageVertices(ref Context context, ref Matrix4x4 modelViewMatrix) {
+            if (context.instance.LastCageUpdateFrame != context.currentFrame) {
+                context.instance.UpdateCage();
+            }
+            
+            var cageVertices = context.instance.CageVertices;
+            
+            ProjectedVertex projectedVertex = default;
+            
+            for (int i = 0; i < cageVertices.Length; i++) {
+                projectedVertex.Position = modelViewMatrix.MultiplyPoint3x4(cageVertices[i]);
+                
+                if (context.isOrthographic) {
+                    projectedVertex.Projection = projectedVertex.Position;
+                } else {
+                    projectedVertex.Projection.z = context.pixelScale / projectedVertex.Position.z;
+                    projectedVertex.Projection.x = projectedVertex.Position.x * projectedVertex.Projection.z;
+                    projectedVertex.Projection.y = projectedVertex.Position.y * projectedVertex.Projection.z;
+                }
+                
+                context.projectedVertices[i] = projectedVertex;
+            }
+            
+            context.projectedPartCorners = context.projectedVertices + cageVertices.Length;
+        }
+        
+        unsafe void SetupParts(ref Context context) {
+            var parts = context.model.Parts;
+            
+            int cornersCount = 0;
+            
+            sortedPartIndices.Clear();
+            
+            for (int partIndex = 0; partIndex < parts.Length; partIndex++) {
+                var part = parts[partIndex];
+                
+                float minZ = float.PositiveInfinity;
+                for (int corner = 0; corner < GridCornersCount; corner++) {
+                    var vertexPointer = context.projectedVertices + part.Vertices[corner];
+                    context.projectedPartCorners[cornersCount] = *vertexPointer;
+                    if (vertexPointer->Position.z < minZ) minZ = vertexPointer->Position.z;
+                    cornersCount++;
+                }
+                
+                sortedPartIndices.Add((minZ, partIndex));
+            }
+            
+            sortedPartIndices.Sort();
+            
+            context.projectedGridsStack = context.projectedPartCorners + cornersCount;
+        }
+        
+        unsafe void RenderParts(ref Context context) {
+            var parts = context.model.Parts;
+            var frames = context.instance.Frames;
+            
+            Matrix4x4 affineMatrix = default;
+            IndexCache8 emptyIndices = new IndexCache8 {n0=-1, n1=-1, n2=-1, n3=-1, n4=-1, n5=-1, n6=-1, n7=-1};
+            
+            foreach (var (minZ, partIndex) in sortedPartIndices) {
+                int frame = ((frames != null) && (partIndex < frames.Length)) ? frames[partIndex] : 0;
+                context.partIndex = partIndex;
+                context.geometryIndex = parts[partIndex].Geometries[frame];
+                
+                var projectedPartCorners = context.projectedPartCorners + partIndex*GridCornersCount;
+                var projectedGrid = context.projectedGridsStack;
+                
+                for (int corner = 0; corner < GridCornersCount; corner++) {
+                    projectedGrid[context.gridCornerIndices[corner]] = projectedPartCorners[corner];
+                }
+                
+                var geometry = context.model.Geometries[context.geometryIndex];
+                var octree = geometry as RawOctree;
+                // int maxLevel = octree.MaxLevel;
+                int maxLevel = Mathf.Min(octree.MaxLevel, MaxLevel);
+                int node = octree.RootNode;
+                var color = octree.RootColor;
+                int mask = node & 0xFF;
+                fixed (int* nodes = octree.Nodes)
+                fixed (Color32* colors = octree.Colors)
+                {
+                    var cacheOffsetKey = (context.instance, context.model, context.partIndex, context.geometryIndex);
+                    
+                    int writeIndexStart = context.writeIndex;
+                    
+                    if (!context.cache.sourceCacheOffsets.TryGetValue(cacheOffsetKey, out var readIndex)) {
+                        readIndex = -1;
+                    }
+                    
+                    readIndex = (readIndex << 8) | mask;
+                    
+                    RenderGeometry(ref context, projectedGrid, ref affineMatrix,
+                        readIndex, LoadNode, maxLevel, node, color, nodes, colors, ref emptyIndices);
+                    
+                    if (context.writeIndex > writeIndexStart) {
+                        context.cache.targetCacheOffsets[cacheOffsetKey] = writeIndexStart;
+                    }
+                }
+            }
+        }
+        
+        unsafe void RenderGeometry(ref Context context, ProjectedVertex* projectedGrid,
+            ref Matrix4x4 affineMatrix, int readIndex, LoadFuncDelegate loadFunc,
+            int maxLevel, int loadAddress, Color32 parentColor, int* nodes, Color32* colors,
+            ref IndexCache8 emptyIndices, int minY = 0, int parentOffset = 0)
+        {
+            // Calculate screen bounds
+            CalculateBounds(ref context, projectedGrid, out var boundsMin, out var boundsMax);
+            
+            // Scissor test
+            if (!((boundsMin.x < context.xMax) & (boundsMax.x > context.xMin))) return;
+            if (!((boundsMin.y < context.yMax) & (boundsMax.y > context.yMin))) return;
+            if (!((boundsMin.z < context.zFar) & (boundsMax.z > context.zNear))) return;
+            
+            int ixMin = (int)((boundsMin.x > context.xMin ? boundsMin.x : context.xMin) + context.xCenter + 0.5f);
+            int iyMin = (int)((boundsMin.y > context.yMin ? boundsMin.y : context.yMin) + context.yCenter + 0.5f);
+            int ixMax = (int)((boundsMax.x < context.xMax ? boundsMax.x : context.xMax) + context.xCenter - 0.5f);
+            int iyMax = (int)((boundsMax.y < context.yMax ? boundsMax.y : context.yMax) + context.yCenter - 0.5f);
+            if (iyMin < minY) iyMin = minY;
+            if ((ixMax < ixMin) | (iyMax < iyMin)) return;
+            
+            if (boundsMin.z > context.zNear) {
+                int iz = (int)((boundsMin.z - context.zNear) * context.depthScale);
+                
+                if ((maxLevel == 0) | ((ixMin == ixMax) & (iyMin == iyMax))) {
+                    // Draw, if reached the leaf level or node occupies 1 pixel on screen
+                    for (int y = iyMin; y <= iyMax; y++) {
+                        var bufY = context.buffer + (y << context.bufferShift);
+                        for (int x = ixMin; x <= ixMax; x++) {
+                            bufY[x].id += 1;
+                            if (iz < (bufY[x].depth & int.MaxValue)) {
+                                bufY[x].color = parentColor;
+                                bufY[x].depth = iz;
+                            }
+                        }
+                    }
+                    return;
+                } else {
+                    // Occlusion test
+                    for (int y = iyMin; y <= iyMax; y++) {
+                        var bufY = context.buffer + (y << context.bufferShift);
+                        for (int x = ixMin; x <= ixMax; x++) {
+                            bufY[x].id += 1;
+                            if (iz < (bufY[x].depth & int.MaxValue)) {
+                                minY = y;
+                                goto traverse;
+                            }
+                        }
+                    }
+                    return;
+                    traverse:;
+                }
+                
+                // If distortion is less than pixel, switch to affine processing
+                // (Though only if fully between near & far planes, and size isn't very large)
+                if (boundsMax.z < context.zFar) {
+                    const int MaxAffineSize = 1 << 15;
+                    var sizeX = boundsMax.x - boundsMin.x;
+                    var sizeY = boundsMax.y - boundsMin.y;
+                    var size = (sizeX > sizeY ? sizeX : sizeY);
+                    if ((size < MaxAffineSize) && IsApproximatelyAffine(projectedGrid, ref affineMatrix)) {
+                        // RenderPoints(context.buffer, context.width, context.height, context.bufferShift,
+                        //     context.queues, context.deltas, context.stack, context.map, context.xmap, context.ymap,
+                        //     in affineMatrix, maxLevel, loadAddress, parentColor, nodes, colors,
+                        //     context.readIndexCache, context.writeIndexCache, context.readInfoCache, context.writeInfoCache,
+                        //     readIndex, ref context.writeIndex, LoadNode);
+                        // return;
+                    }
+                }
+            } else {
+                // If this node intersects the near plane, we can only subdivide further or skip
+                
+                // Skip, if reached the leaf level or node occupies 1 pixel on screen
+                if ((maxLevel == 0) | ((ixMin == ixMax) & (iyMin == iyMax))) return;
+            }
+            
+            ///////////////////////////////////////////
+            
+            // Calculate base parent offset for this node's children
+            int subParentOffset = context.writeIndex << 3;
+            var info8 = context.writeInfoCache + subParentOffset;
+            var index8 = context.writeIndexCache + subParentOffset;
+            var index8read = index8;
+            
+            // Write reference to this cached node in the parent
+            context.writeIndexCache[parentOffset] = context.writeIndex;
+            
+            // Clear the cached node references
+            *((IndexCache8*)index8) = emptyIndices;
+            
+            if (readIndex < 0) {
+                loadFunc(loadAddress, info8, nodes, colors);
+                LoadedCount++;
+            } else {
+                int _readIndex = readIndex >> 8;
+                index8read = context.readIndexCache + (_readIndex << 3);
+                *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[_readIndex];
+            }
+            
+            context.writeIndex += 1;
+            
+            ///////////////////////////////////////////
+            
+            int nodeMask = readIndex & 0xFF;
+            
+            Subdivide(ref context, projectedGrid);
+            
+            // Determine approximate order and queue
+            var T = projectedGrid[(int)GridVertex.MidMidMid].Position;
+            var X = projectedGrid[(int)GridVertex.MaxMidMid].Position - T;
+            var Y = projectedGrid[(int)GridVertex.MidMaxMid].Position - T;
+            var Z = projectedGrid[(int)GridVertex.MidMidMax].Position - T;
+            affineMatrix.m00 = X.x; affineMatrix.m10 = X.y; affineMatrix.m20 = X.z;
+            affineMatrix.m01 = Y.x; affineMatrix.m11 = Y.y; affineMatrix.m21 = Y.z;
+            affineMatrix.m02 = Z.x; affineMatrix.m12 = Z.y; affineMatrix.m22 = Z.z;
+            int orderKey = OctantOrder.Key(in affineMatrix);
+            var queue = context.queues[nodeMask];
+            
+            // Process subnodes
+            for (; queue != 0; queue >>= 4) {
+                int octant = unchecked((int)(queue & 7));
+                
+                int octantParentOffset = subParentOffset | octant;
+                int octantReadIndex = (index8read[octant] << 8) | info8[octant].Mask;
+                int octantLoadAddress = info8[octant].Address;
+                var octantColor24 = info8[octant].Color;
+                var octantColor = new Color32 {r = octantColor24.R, g = octantColor24.G, b = octantColor24.B, a = 255};
+                
+                var octantGrid = projectedGrid + GridVertexCount;
+                var octantCorners = context.subgridCornerIndices + (octant << 3);
+                for (int corner = 0; corner < GridCornersCount; corner++) {
+                    octantGrid[context.gridCornerIndices[corner]] = projectedGrid[octantCorners[corner]];
+                }
+                
+                RenderGeometry(ref context, octantGrid,
+                    ref affineMatrix, octantReadIndex, loadFunc,
+                    maxLevel-1, octantLoadAddress, octantColor, nodes, colors,
+                    ref emptyIndices, minY, octantParentOffset);
+            }
+        }
+        
+        unsafe void CalculateBounds(ref Context context, ProjectedVertex* projectedGrid, out Vector3 min, out Vector3 max) {
+            var vertex = projectedGrid + context.gridCornerIndices[0];
+            min = max = new Vector3 {x = vertex->Projection.x, y = vertex->Projection.y, z = vertex->Position.z};
+            
+            for (int corner = 1; corner < GridCornersCount; corner++) {
+                vertex = projectedGrid + context.gridCornerIndices[corner];
+                if (vertex->Projection.x < min.x) min.x = vertex->Projection.x;
+                if (vertex->Projection.x > max.x) max.x = vertex->Projection.x;
+                if (vertex->Projection.y < min.y) min.y = vertex->Projection.y;
+                if (vertex->Projection.y > max.y) max.y = vertex->Projection.y;
+                if (vertex->Position.z < min.z) min.z = vertex->Position.z;
+                if (vertex->Position.z > max.z) max.z = vertex->Position.z;
+            }
+        }
+        
+        unsafe bool IsApproximatelyAffine(ProjectedVertex* projectedGrid, ref Matrix4x4 matrix) {
+            var TMinX = projectedGrid[(int)GridVertex.MinMinMin].Projection.x;
+            var XMinX = projectedGrid[(int)GridVertex.MaxMinMin].Projection.x - TMinX;
+            var YMinX = projectedGrid[(int)GridVertex.MinMaxMin].Projection.x - TMinX;
+            var ZMinX = projectedGrid[(int)GridVertex.MinMinMax].Projection.x - TMinX;
+            var TMinY = projectedGrid[(int)GridVertex.MinMinMin].Projection.y;
+            var XMinY = projectedGrid[(int)GridVertex.MaxMinMin].Projection.y - TMinY;
+            var YMinY = projectedGrid[(int)GridVertex.MinMaxMin].Projection.y - TMinY;
+            var ZMinY = projectedGrid[(int)GridVertex.MinMinMax].Projection.y - TMinY;
+            
+            var TMaxX = projectedGrid[(int)GridVertex.MaxMaxMax].Projection.x;
+            var XMaxX = projectedGrid[(int)GridVertex.MinMaxMax].Projection.x - TMaxX;
+            var YMaxX = projectedGrid[(int)GridVertex.MaxMinMax].Projection.x - TMaxX;
+            var ZMaxX = projectedGrid[(int)GridVertex.MaxMaxMin].Projection.x - TMaxX;
+            var TMaxY = projectedGrid[(int)GridVertex.MaxMaxMax].Projection.y;
+            var XMaxY = projectedGrid[(int)GridVertex.MinMaxMax].Projection.y - TMaxY;
+            var YMaxY = projectedGrid[(int)GridVertex.MaxMinMax].Projection.y - TMaxY;
+            var ZMaxY = projectedGrid[(int)GridVertex.MaxMaxMin].Projection.y - TMaxY;
+            
+            // Theoretically, checking the distortion of any 2 axes should be enough?
+            float distortion, maxDistortion = 0f;
+            distortion = XMinX + XMaxX; if (distortion < 0f) distortion = -distortion;
+            if (distortion > maxDistortion) maxDistortion = distortion;
+            distortion = XMinY + XMaxY; if (distortion < 0f) distortion = -distortion;
+            if (distortion > maxDistortion) maxDistortion = distortion;
+            distortion = YMinX + YMaxX; if (distortion < 0f) distortion = -distortion;
+            if (distortion > maxDistortion) maxDistortion = distortion;
+            distortion = YMinY + YMaxY; if (distortion < 0f) distortion = -distortion;
+            if (distortion > maxDistortion) maxDistortion = distortion;
+            distortion = ZMinX + ZMaxX; if (distortion < 0f) distortion = -distortion;
+            if (distortion > maxDistortion) maxDistortion = distortion;
+            distortion = ZMinY + ZMaxY; if (distortion < 0f) distortion = -distortion;
+            if (distortion > maxDistortion) maxDistortion = distortion;
+            
+            if (maxDistortion > 1f) return false;
+            
+            var TMinZ = projectedGrid[(int)GridVertex.MinMinMin].Position.z;
+            var XMinZ = projectedGrid[(int)GridVertex.MaxMinMin].Position.z - TMinZ;
+            var YMinZ = projectedGrid[(int)GridVertex.MinMaxMin].Position.z - TMinZ;
+            var ZMinZ = projectedGrid[(int)GridVertex.MinMinMax].Position.z - TMinZ;
+            var TMaxZ = projectedGrid[(int)GridVertex.MaxMaxMax].Position.z;
+            var XMaxZ = projectedGrid[(int)GridVertex.MinMaxMax].Position.z - TMaxZ;
+            var YMaxZ = projectedGrid[(int)GridVertex.MaxMinMax].Position.z - TMaxZ;
+            var ZMaxZ = projectedGrid[(int)GridVertex.MaxMaxMin].Position.z - TMaxZ;
+            
+            matrix.m00 = (XMinX - XMaxX) * 0.25f;
+            matrix.m10 = (XMinY - XMaxY) * 0.25f;
+            matrix.m20 = (XMinZ - XMaxZ) * 0.25f;
+            
+            matrix.m01 = (YMinX - YMaxX) * 0.25f;
+            matrix.m11 = (YMinY - YMaxY) * 0.25f;
+            matrix.m21 = (YMinZ - YMaxZ) * 0.25f;
+            
+            matrix.m02 = (ZMinX - ZMaxX) * 0.25f;
+            matrix.m12 = (ZMinY - ZMaxY) * 0.25f;
+            matrix.m22 = (ZMinZ - ZMaxZ) * 0.25f;
+            
+            matrix.m03 = (TMinX + TMaxX) * 0.5f;
+            matrix.m13 = (TMinY + TMaxY) * 0.5f;
+            matrix.m23 = (TMinZ + TMaxZ) * 0.5f;
+            
+            return true;
+        }
+        
+        unsafe void Subdivide(ref Context context, ProjectedVertex* projectedGrid) {
+            const int SubdivisionIndicesCount = GridNonCornersCount * 3;
+            
+            for (int i = 0; i < SubdivisionIndicesCount; i += 3) {
+                var vertex0 = projectedGrid + context.gridSubdivisionIndices[i+0];
+                var vertex1 = projectedGrid + context.gridSubdivisionIndices[i+1];
+                var midpoint = projectedGrid + context.gridSubdivisionIndices[i+2];
+                
+                midpoint->Position.x = (vertex0->Position.x + vertex1->Position.x) * 0.5f;
+                midpoint->Position.y = (vertex0->Position.y + vertex1->Position.y) * 0.5f;
+                midpoint->Position.z = (vertex0->Position.z + vertex1->Position.z) * 0.5f;
+                
+                if (context.isOrthographic) {
+                    midpoint->Projection = midpoint->Position;
+                } else {
+                    midpoint->Projection.z = context.pixelScale / midpoint->Position.z;
+                    midpoint->Projection.x = midpoint->Position.x * midpoint->Projection.z;
+                    midpoint->Projection.y = midpoint->Position.y * midpoint->Projection.z;
+                }
+            }
+        }
+        
+        public unsafe void RenderObjects(Buffer buffer, IEnumerable<(ModelInstance, Matrix4x4, int)> instances) {
+            if (buffer.Subsample) {
                 int frame = Time.frameCount;
                 currentCacheIndex = frame & 0b11;
             }
@@ -678,7 +1245,7 @@ namespace dairin0d.Rendering.Octree2 {
                     fixed (int* nodes = octree.Nodes)
                     fixed (Color32* colors = octree.Colors)
                     {
-                        var cacheOffsetKey = (instance, partIndex, geometryIndex);
+                        var cacheOffsetKey = (instance, model, partIndex, geometryIndex);
                         
                         int writeIndexStart = writeIndex;
                         

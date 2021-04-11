@@ -31,6 +31,12 @@ namespace dairin0d.Rendering.Octree2 {
 
         public Model3D Model;
         public Transform[] Bones;
+        public int[] Frames;
+
+        public float DistortionAmplitude = 0f;
+        public float DistortionSpeed = 0.5f;
+        private Vector3[] distortionDirections;
+        private float[] distortionPhases;
 
         private Bounds bounds;
         public Bounds Bounds => bounds; // in world space
@@ -41,6 +47,13 @@ namespace dairin0d.Rendering.Octree2 {
         private LinkedListNode<ModelInstance> listNode;
 
         private Model3D cachedModel;
+
+        private Vector3[] cageVertices;
+        public Vector3[] CageVertices => cageVertices;
+        
+        public int LastCageUpdateFrame {get; private set;} = -1;
+        
+        private Matrix4x4[] bindposes;
 
         void Awake() {
             cachedTransform = transform;
@@ -89,6 +102,71 @@ namespace dairin0d.Rendering.Octree2 {
             
             bounds = new Bounds(newCenter, newSize);
             cachedTransform.hasChanged = false;
+        }
+        
+        public void UpdateCage() {
+            LastCageUpdateFrame = Time.frameCount;
+            
+            var cage = Model.Cage;
+            var positions = cage.Positions;
+            
+            if ((cageVertices == null) || (cageVertices.Length != positions.Length)) {
+                cageVertices = new Vector3[positions.Length];
+                System.Array.Copy(positions, cageVertices, positions.Length);
+                
+                distortionDirections = new Vector3[positions.Length];
+                distortionPhases = new float[positions.Length];
+                for (int vertexIndex = 0; vertexIndex < positions.Length; vertexIndex++) {
+                    distortionDirections[vertexIndex] = Random.onUnitSphere;
+                    distortionPhases[vertexIndex] = vertexIndex / (float)positions.Length;
+                }
+            }
+            
+            if (DistortionAmplitude > 0) {
+                float deltaTime = Time.deltaTime;
+                for (int vertexIndex = 0; vertexIndex < positions.Length; vertexIndex++) {
+                    distortionPhases[vertexIndex] = (distortionPhases[vertexIndex] + deltaTime * DistortionSpeed) % 1f;
+                    var offset = distortionDirections[vertexIndex] * Mathf.Sin(2f * Mathf.PI * distortionPhases[vertexIndex]);
+                    cageVertices[vertexIndex] = positions[vertexIndex] + offset * DistortionAmplitude;
+                }
+            }
+            
+            if ((Bones == null) || (Bones.Length == 0)) return;
+            
+            var modelBones = Model.Bones;
+            if ((modelBones == null) || (modelBones.Length == 0)) return;
+            
+            var weightCounts = cage.WeightCounts;
+            if ((weightCounts == null) || (weightCounts.Length == 0)) return;
+            
+            var weights = cage.Weights;
+            if ((weights == null) || (weights.Length == 0)) return;
+            
+            if ((bindposes == null) || (bindposes.Length != modelBones.Length)) {
+                bindposes = new Matrix4x4[modelBones.Length];
+            }
+            
+            var worldToLocal = cachedTransform.worldToLocalMatrix;
+            
+            for (int boneIndex = 0; boneIndex < modelBones.Length; boneIndex++) {
+                if (boneIndex < Bones.Length) {
+                    bindposes[boneIndex] = Matrix4x4.identity;
+                } else {
+                    var boneToWorld = Bones[boneIndex].localToWorldMatrix;
+                    bindposes[boneIndex] = worldToLocal * boneToWorld * modelBones[boneIndex].BindposeInverted;
+                }
+            }
+            
+            int weightIndex = 0;
+            for (int vertexIndex = 0; vertexIndex < positions.Length; vertexIndex++) {
+                var p = positions[vertexIndex];
+                int weightIndexEnd = weightIndex + weightCounts[vertexIndex];
+                var v = Vector3.zero;
+                for (; weightIndex < weightIndexEnd; weightIndex++) {
+                    v += bindposes[weights[weightIndex].Index].MultiplyPoint3x4(p) * weights[weightIndex].Weight;
+                }
+                cageVertices[vertexIndex] = v;
+            }
         }
     }
 }

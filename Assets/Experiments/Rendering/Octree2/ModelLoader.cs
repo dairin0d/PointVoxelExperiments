@@ -64,13 +64,32 @@ namespace dairin0d.Rendering.Octree2 {
         Model3D MakeModel(RawOctree octree, string name) {
             var model = new Model3D();
             model.Name = name;
+            
             model.Geometries = new ModelGeometry[] {octree};
+            
             model.Bounds = new Bounds(Vector3.zero, Vector3.one * Scale); // for now
+            
+            float halfScale = Scale * 0.5f;
+            model.Cage = new ModelCage {
+                Positions = new Vector3[] {
+                    new Vector3(-halfScale, -halfScale, -halfScale),
+                    new Vector3(+halfScale, -halfScale, -halfScale),
+                    new Vector3(-halfScale, +halfScale, -halfScale),
+                    new Vector3(+halfScale, +halfScale, -halfScale),
+                    new Vector3(-halfScale, -halfScale, +halfScale),
+                    new Vector3(+halfScale, -halfScale, +halfScale),
+                    new Vector3(-halfScale, +halfScale, +halfScale),
+                    new Vector3(+halfScale, +halfScale, +halfScale),
+                },
+            };
+            
             model.Parts = new ModelPart[] {
                 new ModelPart() {
-                    Geometries = new int[] {0}
+                    Vertices = new int[] {0, 1, 2, 3, 4, 5, 6, 7},
+                    Geometries = new int[] {0},
                 }
             };
+            
             return model;
         }
     }
