@@ -153,12 +153,16 @@ namespace dairin0d.Tests {
             NodeMinIfE,
             NodeMinIfF,
             Map,
+            Bitcount256,
+            Bitcount16x2,
+            Bitcount256i,
         }
         
         TestMode[] test_modes;
         int[] test_times;
         
         int[] arr1, arr2;
+        byte[] arr1b;
         
         struct TestStruct {
             public short s0, s1;
@@ -191,6 +195,10 @@ namespace dairin0d.Tests {
         
         int[] map = new int[64];
         
+        int[] bitcounts8i = new int[1 << 8];
+        byte[] bitcounts8 = new byte[1 << 8];
+        byte[] bitcounts4 = new byte[1 << 4];
+        
         void Start() {
             if (!Application.isEditor) Screen.SetResolution(640, 480, false);
             
@@ -201,10 +209,12 @@ namespace dairin0d.Tests {
             
             arr1 = new int[Count];
             arr2 = new int[Count];
+            arr1b = new byte[Count];
             
             Random.InitState(Seed);
             for (int i = 0; i < Count; i++) {
                 arr1[i] = Random.Range(short.MinValue, short.MaxValue);
+                arr1b[i] = (byte)Random.Range(byte.MinValue, byte.MaxValue);
             }
             
             int subpixel_shift = 8;
@@ -224,6 +234,22 @@ namespace dairin0d.Tests {
             
             for (int i = 0; i < map.Length; i++) {
                 map[i] = Random.Range(1, 255) | 0xFFFF00;
+            }
+            
+            for (int i = 0; i < bitcounts8.Length; i++) {
+                bitcounts8[i] = (byte)CountBits(i);
+                bitcounts8i[i] = bitcounts8[i];
+            }
+            for (int i = 0; i < bitcounts4.Length; i++) {
+                bitcounts4[i] = (byte)CountBits(i);
+            }
+            
+            int CountBits(int value) {
+                int count = 0;
+                for (uint bits = unchecked((uint)value); bits != 0; bits >>= 1) {
+                    if ((bits & 1) != 0) count++;
+                }
+                return count;
             }
         }
 
@@ -247,10 +273,15 @@ namespace dairin0d.Tests {
         
         unsafe void Test(int test_index, int x0b=0, int y0b=0, int x1b=640, int y1b=480, int forward_key=0, int mask=255) {
             var test_mode = test_modes[test_index];
-            fixed (int* _ptr1 = arr1, _ptr2 = arr2) {
-                int* ptr1 = _ptr1;
-                int* ptr2 = _ptr2;
-                int* ptr1_end = ptr1 + arr1.Length;
+            fixed (int* _ptr1 = arr1, _ptr2 = arr2)
+            fixed (byte* _ptr1b = arr1b)
+            {
+                var ptr1 = _ptr1;
+                var ptr2 = _ptr2;
+                var ptr1b = _ptr1b;
+                var ptr1_end = ptr1 + arr1.Length;
+                var ptr2_end = ptr2 + arr2.Length;
+                var ptr1b_end = ptr1b + arr1b.Length;
                 if (test_mode == TestMode.ManagedCopy) {
                     stopwatch.Restart();
                     for (int i = 0; i < arr1.Length; i++) {
@@ -282,11 +313,11 @@ namespace dairin0d.Tests {
                         *ptr2 = *ptr1 - ((*ptr1 - threshold) & ((*ptr1 - threshold) >> 31));
                     }
                 } else if (test_mode == TestMode.PointerCastCopy) {
-                    byte* ptr1b = (byte*)ptr1;
-                    byte* ptr2b = (byte*)ptr2;
-                    byte* ptr1b_end = (byte*)ptr1_end;
-                    for (stopwatch.Restart(); ptr1b != ptr1b_end; ptr1b += 4, ptr2b += 4) {
-                        *((int*)ptr2b) = *((int*)ptr1b);
+                    byte* ptr1_b = (byte*)ptr1;
+                    byte* ptr2_b = (byte*)ptr2;
+                    byte* ptr1_b_end = (byte*)ptr1_end;
+                    for (stopwatch.Restart(); ptr1_b != ptr1_b_end; ptr1_b += 4, ptr2_b += 4) {
+                        *((int*)ptr2_b) = *((int*)ptr1_b);
                     }
                 } else if (test_mode == TestMode.UnpackField) {
                     TestStruct* fptr1 = (TestStruct*)ptr1;
@@ -371,6 +402,33 @@ namespace dairin0d.Tests {
                         for (int i = 0; i < count; ++i, ++ptr2) {
                             uint queue = queues[keymask & map_ptr[i & 3]];
                             if (queue != 0) *ptr2 = ptr1[queue & 7];
+                        }
+                    }
+                } else if (test_mode == TestMode.Bitcount256) {
+                    fixed (byte* bitcounts_ptr = bitcounts8)
+                    {
+                        int sum = 0;
+                        for (stopwatch.Restart(); ptr1b != ptr1b_end; ++ptr1b, ++ptr2) {
+                            ptr2[0] = sum;
+                            sum += bitcounts_ptr[ptr1b[0]];
+                        }
+                    }
+                } else if (test_mode == TestMode.Bitcount16x2) {
+                    fixed (byte* bitcounts_ptr = bitcounts4)
+                    {
+                        int sum = 0;
+                        for (stopwatch.Restart(); ptr1b != ptr1b_end; ++ptr1b, ++ptr2) {
+                            ptr2[0] = sum;
+                            sum += bitcounts_ptr[ptr1b[0] & 0b1111] + bitcounts_ptr[ptr1b[0] >> 4];
+                        }
+                    }
+                } else if (test_mode == TestMode.Bitcount256i) {
+                    fixed (int* bitcounts_ptr = bitcounts8i)
+                    {
+                        int sum = 0;
+                        for (stopwatch.Restart(); ptr1b != ptr1b_end; ++ptr1b, ++ptr2) {
+                            ptr2[0] = sum;
+                            sum += bitcounts_ptr[ptr1b[0]];
                         }
                     }
                 }
