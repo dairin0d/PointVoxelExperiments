@@ -29,7 +29,7 @@ using UnityEngine;
 using dairin0d.Data.Points;
 using dairin0d.Data.Voxels;
 
-namespace dairin0d.Rendering.Octree2 {
+namespace dairin0d.Rendering {
     [RequireComponent(typeof(ModelInstance))]
     public class ModelLoader : MonoBehaviour {
         public string Path;

@@ -29,7 +29,7 @@ using UnityEngine;
 using dairin0d.Data.Points;
 using dairin0d.Data.Voxels;
 
-namespace dairin0d.Rendering.Octree2 {
+namespace dairin0d.Rendering {
     public class Model3D {
         public string Name;
         public Bounds Bounds; // for camera frustum culling

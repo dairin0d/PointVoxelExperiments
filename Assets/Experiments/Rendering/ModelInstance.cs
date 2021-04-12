@@ -24,7 +24,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace dairin0d.Rendering.Octree2 {
+namespace dairin0d.Rendering {
     public class ModelInstance : MonoBehaviour {
         private static LinkedList<ModelInstance> allInstances = new LinkedList<ModelInstance>();
         public static IEnumerable<ModelInstance> All => allInstances;

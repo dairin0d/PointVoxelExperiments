@@ -23,7 +23,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace dairin0d.Rendering.Octree2 {
+namespace dairin0d.Rendering {
     class Buffer {
         public struct DataItem {
             public int stencil;
@@ -248,7 +248,7 @@ namespace dairin0d.Rendering.Octree2 {
         }
     }
 
-    public class OctreeRenderer2 : MonoBehaviour {
+    public class OctreeRenderer : MonoBehaviour {
         public int VSyncCount = 0;
         public int TargetFrameRate = 30;
 
