@@ -54,7 +54,7 @@ namespace dairin0d.Rendering {
 		}
 		
 		// The input vectors are relative to a box of (1 << shift) size
-		public void Bake(int Xx, int Xy, int Yx, int Yy, int Zx, int Zy, int Tx, int Ty, int shift) {
+		public void Bake(int Xx, int Xy, int Yx, int Yy, int Zx, int Zy, int Tx, int Ty, int shift, int dimension = 2) {
 			if (data == null) return;
 			
 			if (shift > PrecisionShift) {
@@ -84,118 +84,116 @@ namespace dairin0d.Rendering {
 			extents_x >>= 1;
 			extents_y >>= 1;
 
-			Tx -= half_pixel;
-			Ty -= half_pixel;
+			if (dimension >= 2) {
+				int dotXM = Mathf.Max(Mathf.Abs(Xx*(Yy+Zy) - Xy*(Yx+Zx)), Mathf.Abs(Xx*(Yy-Zy) - Xy*(Yx-Zx)));
+				int dotYM = Mathf.Max(Mathf.Abs(Yx*(Xy+Zy) - Yy*(Xx+Zx)), Mathf.Abs(Yx*(Xy-Zy) - Yy*(Xx-Zx)));
+				int dotZM = Mathf.Max(Mathf.Abs(Zx*(Xy+Yy) - Zy*(Xx+Yx)), Mathf.Abs(Zx*(Xy-Yy) - Zy*(Xx-Yx)));
 
-			int dotXM = Mathf.Max(Mathf.Abs(Xx*(Yy+Zy) - Xy*(Yx+Zx)), Mathf.Abs(Xx*(Yy-Zy) - Xy*(Yx-Zx)));
-			int dotYM = Mathf.Max(Mathf.Abs(Yx*(Xy+Zy) - Yy*(Xx+Zx)), Mathf.Abs(Yx*(Xy-Zy) - Yy*(Xx-Zx)));
-			int dotZM = Mathf.Max(Mathf.Abs(Zx*(Xy+Yy) - Zy*(Xx+Yx)), Mathf.Abs(Zx*(Xy-Yy) - Zy*(Xx-Yx)));
+				dotXM >>= 1;
+				dotYM >>= 1;
+				dotZM >>= 1;
 
-			dotXM >>= 1;
-			dotYM >>= 1;
-			dotZM >>= 1;
+				dotXM += (Mathf.Abs(Xx) + Mathf.Abs(Xy)) * half_pixel;
+				dotYM += (Mathf.Abs(Yx) + Mathf.Abs(Yy)) * half_pixel;
+				dotZM += (Mathf.Abs(Zx) + Mathf.Abs(Zy)) * half_pixel;
 
-			dotXM += (Mathf.Abs(Xx) + Mathf.Abs(Xy)) * half_pixel;
-			dotYM += (Mathf.Abs(Yx) + Mathf.Abs(Yy)) * half_pixel;
-			dotZM += (Mathf.Abs(Zx) + Mathf.Abs(Zy)) * half_pixel;
-
-			int dotXdx = -Xy << subpixel_shift;
-			int dotXdy = Xx << subpixel_shift;
-			int dotYdx = -Yy << subpixel_shift;
-			int dotYdy = Yx << subpixel_shift;
-			int dotZdx = -Zy << subpixel_shift;
-			int dotZdy = Zx << subpixel_shift;
-			
-			System.Array.Clear(data, 0, data.Length);
-			
-			int octant = 0;
-			for (int subZ = -1; subZ <= 1; subZ += 2) {
-				for (int subY = -1; subY <= 1; subY += 2) {
-					for (int subX = -1; subX <= 1; subX += 2) {
-						int dx = (Xx*subX + Yx*subY + Zx*subZ) >> 1;
-						int dy = (Xy*subX + Yy*subY + Zy*subZ) >> 1;
-						int cx = Tx + dx;
-						int cy = Ty + dy;
-						
-						// We need at least 2-pixel margin to include the extended boundary
-						int xmin = ((cx-extents_x) >> subpixel_shift) - 2;
-						int ymin = ((cy-extents_y) >> subpixel_shift) - 2;
-						int xmax = ((cx+extents_x) >> subpixel_shift) + 2;
-						int ymax = ((cy+extents_y) >> subpixel_shift) + 2;
-						
-						if (xmin < 0) xmin = 0;
-						if (ymin < 0) ymin = 0;
-						if (xmax > mapSize) xmax = mapSize;
-						if (ymax > mapSize) ymax = mapSize;
-						
-						int offset_x = (xmin << subpixel_shift) - cx;
-						int offset_y = (ymin << subpixel_shift) - cy;
-						
-						int dotXr = Xx*offset_y - Xy*offset_x;
-						int dotYr = Yx*offset_y - Yy*offset_x;
-						int dotZr = Zx*offset_y - Zy*offset_x;
-						
-						byte mask = (byte)(1 << octant);
-						
-						for (int iy = ymin; iy < ymax; ++iy) {
-							int ixy0 = (iy << sizeShift) + xmin;
-							int ixy1 = (iy << sizeShift) + xmax;
-							int dotX = dotXr;
-							int dotY = dotYr;
-							int dotZ = dotZr;
-							for (int ixy = ixy0; ixy < ixy1; ++ixy) {
-								if (((dotX^(dotX>>31)) <= dotXM) & ((dotY^(dotY>>31)) <= dotYM) & ((dotZ^(dotZ>>31)) <= dotZM)) {
-									data[ixy] |= mask;
+				int dotXdx = -Xy << subpixel_shift;
+				int dotXdy = Xx << subpixel_shift;
+				int dotYdx = -Yy << subpixel_shift;
+				int dotYdy = Yx << subpixel_shift;
+				int dotZdx = -Zy << subpixel_shift;
+				int dotZdy = Zx << subpixel_shift;
+				
+				System.Array.Clear(data, 0, data.Length);
+				
+				int octant = 0;
+				for (int subZ = -1; subZ <= 1; subZ += 2) {
+					for (int subY = -1; subY <= 1; subY += 2) {
+						for (int subX = -1; subX <= 1; subX += 2) {
+							int dx = (Xx*subX + Yx*subY + Zx*subZ) >> 1;
+							int dy = (Xy*subX + Yy*subY + Zy*subZ) >> 1;
+							int cx = Tx + dx - half_pixel;
+							int cy = Ty + dy - half_pixel;
+							
+							// We need at least 2-pixel margin to include the extended boundary
+							int xmin = ((cx-extents_x) >> subpixel_shift) - 2;
+							int ymin = ((cy-extents_y) >> subpixel_shift) - 2;
+							int xmax = ((cx+extents_x) >> subpixel_shift) + 2;
+							int ymax = ((cy+extents_y) >> subpixel_shift) + 2;
+							
+							if (xmin < 0) xmin = 0;
+							if (ymin < 0) ymin = 0;
+							if (xmax > mapSize) xmax = mapSize;
+							if (ymax > mapSize) ymax = mapSize;
+							
+							int offset_x = (xmin << subpixel_shift) - cx;
+							int offset_y = (ymin << subpixel_shift) - cy;
+							
+							int dotXr = Xx*offset_y - Xy*offset_x;
+							int dotYr = Yx*offset_y - Yy*offset_x;
+							int dotZr = Zx*offset_y - Zy*offset_x;
+							
+							byte mask = (byte)(1 << octant);
+							
+							for (int iy = ymin; iy < ymax; ++iy) {
+								int ixy0 = (iy << sizeShift) + xmin;
+								int ixy1 = (iy << sizeShift) + xmax;
+								int dotX = dotXr;
+								int dotY = dotYr;
+								int dotZ = dotZr;
+								for (int ixy = ixy0; ixy < ixy1; ++ixy) {
+									if (((dotX^(dotX>>31)) <= dotXM) & ((dotY^(dotY>>31)) <= dotYM) & ((dotZ^(dotZ>>31)) <= dotZM)) {
+										data[ixy] |= mask;
+									}
+									dotX += dotXdx;
+									dotY += dotYdx;
+									dotZ += dotZdx;
 								}
-								dotX += dotXdx;
-								dotY += dotYdx;
-								dotZ += dotZdx;
+								dotXr += dotXdy;
+								dotYr += dotYdy;
+								dotZr += dotZdy;
 							}
-							dotXr += dotXdy;
-							dotYr += dotYdy;
-							dotZr += dotZdy;
+							
+							++octant;
 						}
-						
-						++octant;
 					}
 				}
 			}
 			
-			System.Array.Clear(dataX, 0, dataX.Length);
-			System.Array.Clear(dataY, 0, dataY.Length);
-			
-			Tx += half_pixel;
-			Ty += half_pixel;
-			
-			octant = 0;
-			for (int subZ = -1; subZ <= 1; subZ += 2) {
-				for (int subY = -1; subY <= 1; subY += 2) {
-					for (int subX = -1; subX <= 1; subX += 2) {
-						int dx = (Xx*subX + Yx*subY + Zx*subZ) >> 1;
-						int dy = (Xy*subX + Yy*subY + Zy*subZ) >> 1;
-						int cx = Tx + dx;
-						int cy = Ty + dy;
-						
-						int xmin = ((cx-extents_x) >> subpixel_shift);
-						int ymin = ((cy-extents_y) >> subpixel_shift);
-						int xmax = ((cx+extents_x) >> subpixel_shift);
-						int ymax = ((cy+extents_y) >> subpixel_shift);
-						
-						xmin = Mathf.Max(xmin, 0);
-						ymin = Mathf.Max(ymin, 0);
-						xmax = Mathf.Min(xmax, dataX.Length-1);
-						ymax = Mathf.Min(ymax, dataY.Length-1);
-						
-						byte mask = (byte)(1 << octant);
-						
-						for (int x = xmin; x <= xmax; x++) {
-							dataX[x] |= mask;
+			{
+				System.Array.Clear(dataX, 0, dataX.Length);
+				System.Array.Clear(dataY, 0, dataY.Length);
+				
+				int octant = 0;
+				for (int subZ = -1; subZ <= 1; subZ += 2) {
+					for (int subY = -1; subY <= 1; subY += 2) {
+						for (int subX = -1; subX <= 1; subX += 2) {
+							int dx = (Xx*subX + Yx*subY + Zx*subZ) >> 1;
+							int dy = (Xy*subX + Yy*subY + Zy*subZ) >> 1;
+							int cx = Tx + dx;
+							int cy = Ty + dy;
+							
+							int xmin = ((cx-extents_x) >> subpixel_shift);
+							int ymin = ((cy-extents_y) >> subpixel_shift);
+							int xmax = ((cx+extents_x) >> subpixel_shift);
+							int ymax = ((cy+extents_y) >> subpixel_shift);
+							
+							xmin = Mathf.Max(xmin, 0);
+							ymin = Mathf.Max(ymin, 0);
+							xmax = Mathf.Min(xmax, dataX.Length-1);
+							ymax = Mathf.Min(ymax, dataY.Length-1);
+							
+							byte mask = (byte)(1 << octant);
+							
+							for (int x = xmin; x <= xmax; x++) {
+								dataX[x] |= mask;
+							}
+							for (int y = ymin; y <= ymax; y++) {
+								dataY[y] |= mask;
+							}
+							
+							++octant;
 						}
-						for (int y = ymin; y <= ymax; y++) {
-							dataY[y] |= mask;
-						}
-						
-						++octant;
 					}
 				}
 			}
