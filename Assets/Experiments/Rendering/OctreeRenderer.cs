@@ -475,24 +475,16 @@ namespace dairin0d.Rendering {
         
         struct Delta {
             public int x, y, z, pad0;
-            public int x0, y0, x1, y1;
         }
         Delta[] deltas = new Delta[8 * 32];
         
-        struct StackEntry {
-            public int x, y, offset;
-            public uint queue;
-            public NodeState state;
-        }
-        StackEntry[] stack = new StackEntry[8 * 32];
-        
         struct NodeState {
             public int x0, y0, x1, y1;
-            public int mx0, my0, mx1, my1;
-            public int depth, pixelShift, pixelSize, x, y, z;
+            public int level, x, y, z;
             public int parentOffset, readIndex, loadAddress;
             public Color24 color;
         }
+        NodeState[] stack = new NodeState[8 * 32];
         
         // These are used for faster copying
         struct IndexCache8 {
@@ -590,6 +582,7 @@ namespace dairin0d.Rendering {
             (int)GridVertex.MaxMaxMax,
         };
         
+        // source vertex A, source vertex B, target vertex
         static readonly int[] GridSubdivisionIndices = new int[] {
             // X edges
             (int)GridVertex.MinMinMin, (int)GridVertex.MaxMinMin, (int)GridVertex.MidMinMin,
@@ -654,7 +647,7 @@ namespace dairin0d.Rendering {
             public Buffer.DataItem* buffer;
             public uint* queues;
             public Delta* deltas;
-            public StackEntry* stack;
+            public NodeState* stack;
             public byte* xmap;
             public byte* ymap;
             public int* readIndexCache;
@@ -756,7 +749,7 @@ namespace dairin0d.Rendering {
             fixed (Buffer.DataItem* buf = buffer.Data)
             fixed (uint* queues = OctantOrder.Queues)
             fixed (Delta* deltas = this.deltas)
-            fixed (StackEntry* stack = this.stack)
+            fixed (NodeState* stack = this.stack)
             fixed (byte* xmap = octantMap.DataX)
             fixed (byte* ymap = octantMap.DataY)
             fixed (int* readIndexCache = context.cache.indexCache0)
@@ -1175,32 +1168,32 @@ namespace dairin0d.Rendering {
             int splatAt = SplatAt;
             
             var curr = context.stack + 1;
-            curr->state.depth = 1;
-            curr->state.x = centerX;
-            curr->state.y = centerY;
-            curr->state.z = startZ;
-            curr->state.x0 = (curr->state.x + SubpixelHalf - extentX) >> SubpixelShift;
-            curr->state.y0 = (curr->state.y + SubpixelHalf - extentY) >> SubpixelShift;
-            curr->state.x1 = (curr->state.x - SubpixelHalf + extentX) >> SubpixelShift;
-            curr->state.y1 = (curr->state.y - SubpixelHalf + extentY) >> SubpixelShift;
-            if (curr->state.x0 < 0) curr->state.x0 = 0;
-            if (curr->state.y0 < 0) curr->state.y0 = 0;
-            if (curr->state.x1 >= context.width) curr->state.x1 = context.width-1;
-            if (curr->state.y1 >= context.height) curr->state.y1 = context.height-1;
+            curr->level = 1;
+            curr->x = centerX;
+            curr->y = centerY;
+            curr->z = startZ;
+            curr->x0 = (curr->x + SubpixelHalf - extentX) >> SubpixelShift;
+            curr->y0 = (curr->y + SubpixelHalf - extentY) >> SubpixelShift;
+            curr->x1 = (curr->x - SubpixelHalf + extentX) >> SubpixelShift;
+            curr->y1 = (curr->y - SubpixelHalf + extentY) >> SubpixelShift;
+            if (curr->x0 < 0) curr->x0 = 0;
+            if (curr->y0 < 0) curr->y0 = 0;
+            if (curr->x1 >= context.width) curr->x1 = context.width-1;
+            if (curr->y1 >= context.height) curr->y1 = context.height-1;
             
-            curr->state.parentOffset = parentOffset;
-            curr->state.readIndex = readIndex;
-            curr->state.loadAddress = loadAddress;
-            curr->state.color = new Color24 {R=parentColor.r, G=parentColor.g, B=parentColor.b};
+            curr->parentOffset = parentOffset;
+            curr->readIndex = readIndex;
+            curr->loadAddress = loadAddress;
+            curr->color = new Color24 {R=parentColor.r, G=parentColor.g, B=parentColor.b};
             
             {
-                var state = curr->state;
+                var state = *curr;
                 for (int y = state.y0; y <= state.y1; y++) {
                     var bufY = context.buffer + (y << context.bufferShift);
                     for (int x = state.x0; x <= state.x1; x++) {
                         var pixel = bufY + x;
                         pixel->id += 1;
-                        pixel->stencil = 0;
+                        pixel->depth &= int.MaxValue;
                     }
                 }
             }
@@ -1208,7 +1201,7 @@ namespace dairin0d.Rendering {
             while (curr > context.stack) {
                 AffineNodeCount++;
                 
-                var state = curr->state;
+                var state = *curr;
                 --curr;
                 
                 int nodeMask = state.readIndex & 0xFF;
@@ -1221,7 +1214,7 @@ namespace dairin0d.Rendering {
                     for (int x = state.x0; x <= state.x1; x++) {
                         var pixel = bufY + x;
                         pixel->id += 1;
-                        if ((state.z < pixel->depth) & (pixel->stencil == 0)) {
+                        if (state.z < pixel->depth) {
                             lastY = y;
                             goto traverse;
                         }
@@ -1256,20 +1249,20 @@ namespace dairin0d.Rendering {
                 ///////////////////////////////////////////
                 
                 bool sizeCondition = (state.x1-state.x0 < splatAt) & (state.y1-state.y0 < splatAt);
-                bool shouldDraw = (state.depth >= maxLevel) | sizeCondition;
+                bool shouldDraw = (state.level >= maxLevel) | sizeCondition;
                 shouldDraw |= !updateCache & (state.readIndex < 0);
                 
                 if (!shouldDraw) {
                     var queue = reverseQueues[nodeMask];
                     
-                    int subExtentX = (extentX >> state.depth) - SubpixelHalf;
-                    int subExtentY = (extentY >> state.depth) - SubpixelHalf;
+                    int subExtentX = (extentX >> state.level) - SubpixelHalf;
+                    int subExtentY = (extentY >> state.level) - SubpixelHalf;
                     
                     for (; queue != 0; queue >>= 4) {
                         int octant = unchecked((int)(queue & 7));
                         
-                        int x = state.x + (deltas[octant].x >> state.depth);
-                        int y = state.y + (deltas[octant].y >> state.depth);
+                        int x = state.x + (deltas[octant].x >> state.level);
+                        int y = state.y + (deltas[octant].y >> state.level);
                         
                         int x0 = (x - subExtentX) >> SubpixelShift;
                         int y0 = (y - subExtentY) >> SubpixelShift;
@@ -1283,23 +1276,23 @@ namespace dairin0d.Rendering {
                         if ((x0 > x1) | (y0 > y1)) continue;
                         
                         ++curr;
-                        curr->state.depth = state.depth+1;
-                        curr->state.x = x;
-                        curr->state.y = y;
-                        curr->state.z = state.z + (deltas[octant].z >> state.depth);
-                        curr->state.x0 = x0;
-                        curr->state.y0 = y0;
-                        curr->state.x1 = x1;
-                        curr->state.y1 = y1;
+                        curr->level = state.level+1;
+                        curr->x = x;
+                        curr->y = y;
+                        curr->z = state.z + (deltas[octant].z >> state.level);
+                        curr->x0 = x0;
+                        curr->y0 = y0;
+                        curr->x1 = x1;
+                        curr->y1 = y1;
                         
-                        curr->state.parentOffset = subParentOffset | octant;
-                        curr->state.readIndex = (index8read[octant] << 8) | info8[octant].Mask;
-                        curr->state.loadAddress = info8[octant].Address;
-                        curr->state.color = info8[octant].Color;
+                        curr->parentOffset = subParentOffset | octant;
+                        curr->readIndex = (index8read[octant] << 8) | info8[octant].Mask;
+                        curr->loadAddress = info8[octant].Address;
+                        curr->color = info8[octant].Color;
                     }
                 } else {
-                    int mapHalf = 1 << (SubpixelShift + potShift - state.depth);
-                    int toMapShift = (SubpixelShift + potShift - state.depth + 1) - octantMap.SizeShift;
+                    int mapHalf = 1 << (SubpixelShift + potShift - state.level);
+                    int toMapShift = (SubpixelShift + potShift - state.level + 1) - octantMap.SizeShift;
                     int sx0 = (state.x0 << SubpixelShift) + SubpixelHalf - (state.x - mapHalf);
                     int sy0 = (state.y0 << SubpixelShift) + SubpixelHalf - (state.y - mapHalf);
                     
@@ -1309,9 +1302,9 @@ namespace dairin0d.Rendering {
                         for (int x = state.x0, mx = sx0; x <= state.x1; x++, mx += SubpixelSize) {
                             var pixel = bufY + x;
                             int mask = context.xmap[mx >> toMapShift] & maskY;
-                            if ((mask != 0) & (state.z < pixel->depth) & (pixel->stencil == 0)) {
+                            if ((mask != 0) & (state.z < pixel->depth)) {
                                 int octant = unchecked((int)(forwardQueues[mask] & 7));
-                                int z = state.z + (deltas[octant].z >> state.depth);
+                                int z = state.z + (deltas[octant].z >> state.level);
                                 pixel->id += 1;
                                 if (z < pixel->depth) {
                                     var color24 = info8[octant].Color;
@@ -1324,8 +1317,7 @@ namespace dairin0d.Rendering {
                                         b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
                                         a = 255
                                     };
-                                    pixel->depth = z;
-                                    pixel->stencil = 1;
+                                    pixel->depth = z | int.MinValue;
                                 }
                             }
                         }

@@ -136,7 +136,7 @@ GameObject:
   - component: {fileID: 139298011}
   - component: {fileID: 139298010}
   m_Layer: 0
-  m_Name: CubeB
+  m_Name: PlaneB
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -154,7 +154,7 @@ Transform:
   m_LocalScale: {x: 2, y: 2, z: 2}
   m_Children: []
   m_Father: {fileID: 1442392331}
-  m_RootOrder: 6
+  m_RootOrder: 7
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &139298010
 MonoBehaviour:
@@ -267,7 +267,7 @@ GameObject:
   - component: {fileID: 168712320}
   - component: {fileID: 168712319}
   m_Layer: 0
-  m_Name: CubeR32
+  m_Name: Rotating32
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -569,7 +569,7 @@ GameObject:
   - component: {fileID: 583697036}
   - component: {fileID: 583697035}
   m_Layer: 0
-  m_Name: CubeDeforming
+  m_Name: Deforming
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -587,7 +587,7 @@ Transform:
   m_LocalScale: {x: 2, y: 2, z: 2}
   m_Children: []
   m_Father: {fileID: 1442392331}
-  m_RootOrder: 7
+  m_RootOrder: 5
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &583697035
 MonoBehaviour:
@@ -759,7 +759,7 @@ GameObject:
   - component: {fileID: 1123480847}
   - component: {fileID: 1123480846}
   m_Layer: 0
-  m_Name: CubeA
+  m_Name: PlaneA
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -777,7 +777,7 @@ Transform:
   m_LocalScale: {x: 2, y: 2, z: 2}
   m_Children: []
   m_Father: {fileID: 1442392331}
-  m_RootOrder: 5
+  m_RootOrder: 6
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!114 &1123480846
 MonoBehaviour:
@@ -890,7 +890,7 @@ GameObject:
   - component: {fileID: 1339328217}
   - component: {fileID: 1339328216}
   m_Layer: 0
-  m_Name: CubeTown
+  m_Name: Town
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -1034,7 +1034,7 @@ GameObject:
   - component: {fileID: 1352266896}
   - component: {fileID: 1352266892}
   m_Layer: 0
-  m_Name: CubeC
+  m_Name: Character
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -1181,9 +1181,9 @@ Transform:
   - {fileID: 1543469095}
   - {fileID: 168712318}
   - {fileID: 1816771805}
+  - {fileID: 583697034}
   - {fileID: 1123480845}
   - {fileID: 139298009}
-  - {fileID: 583697034}
   m_Father: {fileID: 0}
   m_RootOrder: 2
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
@@ -1203,7 +1203,7 @@ GameObject:
   - component: {fileID: 1543469097}
   - component: {fileID: 1543469096}
   m_Layer: 0
-  m_Name: CubeTerrain
+  m_Name: Terrain
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -1348,7 +1348,7 @@ GameObject:
   - component: {fileID: 1816771807}
   - component: {fileID: 1816771806}
   m_Layer: 0
-  m_Name: CubeR64
+  m_Name: Rotating64
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
