@@ -20,6 +20,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#define COORDS_SCANLINE
+#define COORDS_TILE_Y
+#define COORDS_TILE_X
+
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -34,23 +38,35 @@ namespace dairin0d.Rendering {
 
         public DataItem[] Data;
 
+        private static readonly int CacheSizeInBytes;
+        private static readonly int PixelSizeInBytes;
+        private static readonly int TileSizeShift;
+
         public Texture2D Texture;
         private Color32[] colors;
 
         public int Width;
         public int Height;
-        public int TileCountX;
-        public int TileCountY;
-        public int TileShift;
-
-        public int TileSize => 1 << TileShift;
-        public int TileCount => TileCountX * TileCountY;
-
+        public int BufferShiftX;
+        public int BufferShiftY;
+        
+        public int XLowBits, XHighBits;
+        public int YLowBits, YHighBits;
+        public int XMask, YMask;
+        
         public bool Subsample = false;
         private bool wasSubsample = false;
 
         private System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
         public float FrameTime {get; private set;}
+
+        static Buffer() {
+            CacheSizeInBytes = 64*1024; // Typical cache size is 64 kB?
+            PixelSizeInBytes = System.Runtime.InteropServices.Marshal.SizeOf(typeof(DataItem));
+            
+            int pixelsPerCache = CacheSizeInBytes / PixelSizeInBytes;
+            for (; (pixelsPerCache >> TileSizeShift) > 1; TileSizeShift++);
+        }
 
         public void RenderStart(Color32 background) {
             stopwatch.Restart();
@@ -64,7 +80,7 @@ namespace dairin0d.Rendering {
             UpdateTexture();
         }
 
-        public void Resize(int w, int h, int renderSize, int tilePow = 0) {
+        public void Resize(int w, int h, int renderSize) {
             if (renderSize > 0) {
                 int maxTexSize = SystemInfo.maxTextureSize;
                 float scale = Mathf.Min(renderSize, maxTexSize) / (float)Mathf.Max(w, h);
@@ -72,11 +88,8 @@ namespace dairin0d.Rendering {
                 h = Mathf.Max(Mathf.RoundToInt(h * scale), 1);
             }
 
-            tilePow = Mathf.Clamp(tilePow, 0, 12);
-            int tileSize = (tilePow <= 0 ? 0 : 1 << (tilePow - 1));
-
             if (Texture && (w == Width) && (h == Height) && (wasSubsample == Subsample)) {
-                if (tileSize != TileSize) Resize(w, h, tileSize);
+                Resize(w, h);
                 return;
             }
 
@@ -94,25 +107,25 @@ namespace dairin0d.Rendering {
 
             colors = new Color32[w2 * h2];
 
-            Resize(w, h, tileSize);
+            Resize(w, h);
         }
         
-        private void Resize(int width, int height, int tileSize = 0) {
+        private void Resize(int width, int height) {
             Width = width;
             Height = height;
 
-            if (tileSize <= 0) {
-                TileShift = Mathf.Max(NextPow2(width), NextPow2(height));
-            } else {
-                TileShift = NextPow2(tileSize);
-            }
+            BufferShiftX = NextPow2(width);
+            BufferShiftY = NextPow2(height);
 
-            tileSize = 1 << TileShift;
-
-            TileCountX = (Width + tileSize - 1) >> TileShift;
-            TileCountY = (Height + tileSize - 1) >> TileShift;
-
-            int dataSize = tileSize * tileSize * TileCountX * TileCountY;
+            XLowBits = TileSizeShift / 2;
+            YLowBits = TileSizeShift - XLowBits;
+            XHighBits = BufferShiftX - XLowBits;
+            YHighBits = BufferShiftY - YLowBits;
+            
+            XMask = ~(((1 << BufferShiftY) - 1) << XLowBits);
+            YMask = ~(((1 << BufferShiftX) - 1) << YLowBits);
+            
+            int dataSize = (1 << BufferShiftX) * (1 << BufferShiftY);
             if ((Data != null) && (Data.Length >= dataSize)) return;
 
             Data = new DataItem[dataSize];
@@ -130,8 +143,7 @@ namespace dairin0d.Rendering {
         public unsafe void Blit(int depth_shift = -1) {
             int w = Width;
             int h = Height;
-            int shift = TileShift;
-            int tile_size = 1 << shift;
+            int shift = BufferShiftX;
 
             bool show_depth = (depth_shift >= 0);
             bool show_complexity = (depth_shift < -1);
@@ -152,10 +164,22 @@ namespace dairin0d.Rendering {
             fixed (Color32* colors_ptr = colors)
             {
                 for (int y = 0, y2 = y2start; y < h; y++, y2 += y2step) {
-                    var data_ptr_y = data_ptr + y * tile_size;
+                    #if COORDS_SCANLINE
+                    var data_ptr_y = data_ptr + (y << shift);
+                    #elif COORDS_TILE_Y
+                    var data_ptr_y = data_ptr + (((y << BufferShiftX) | y) & YMask);
+                    #elif COORDS_TILE_X
+                    var data_ptr_y = data_ptr + (y << XLowBits);
+                    #endif
                     var colors_ptr_y = colors_ptr + y2 * w2;
                     for (int x = 0, x2 = x2start; x < w; x++, x2 += x2step) {
+                        #if COORDS_SCANLINE
                         var data_x = data_ptr_y + x;
+                        #elif COORDS_TILE_Y
+                        var data_x = data_ptr_y + (x << YLowBits);
+                        #elif COORDS_TILE_X
+                        var data_x = data_ptr_y + (((x << BufferShiftY) | x) & XMask);
+                        #endif
                         var colors_x = colors_ptr_y + x2;
                         
                         byte r0 = colors_x->r;
@@ -214,15 +238,26 @@ namespace dairin0d.Rendering {
 
             int w = Width;
             int h = Height;
-            int shift = TileShift;
-            int tile_size = 1 << shift;
+            int shift = BufferShiftX;
 
             fixed (DataItem* data_ptr = Data)
             {
                 for (int y = 0; y < h; y++) {
-                    var data_ptr_y = data_ptr + y * tile_size;
+                    #if COORDS_SCANLINE
+                    var data_ptr_y = data_ptr + (y << shift);
+                    #elif COORDS_TILE_Y
+                    var data_ptr_y = data_ptr + (((y << BufferShiftX) | y) & YMask);
+                    #elif COORDS_TILE_X
+                    var data_ptr_y = data_ptr + (y << XLowBits);
+                    #endif
                     for (int x = 0; x < w; x++) {
+                        #if COORDS_SCANLINE
                         var data_x = data_ptr_y + x;
+                        #elif COORDS_TILE_Y
+                        var data_x = data_ptr_y + (x << YLowBits);
+                        #elif COORDS_TILE_X
+                        var data_x = data_ptr_y + (((x << BufferShiftY) | x) & XMask);
+                        #endif
                         *data_x = clear_data;
                     }
                 }
@@ -688,6 +723,8 @@ namespace dairin0d.Rendering {
             public Model3D model;
             public NodeCache cache;
             public int width, height, bufferShift;
+            public int BufferShiftX, YMask, YLowBits;
+            public int BufferShiftY, XMask, XLowBits;
             public float xCenter, yCenter, pixelScale;
             public float xMin, yMin, xMax, yMax; // in clip space
             public float zNear, zFar, depthScale;
@@ -719,7 +756,13 @@ namespace dairin0d.Rendering {
             
             context.width = buffer.Width;
             context.height = buffer.Height;
-            context.bufferShift = buffer.TileShift;
+            context.bufferShift = buffer.BufferShiftX;
+            context.BufferShiftX = buffer.BufferShiftX;
+            context.YMask = buffer.YMask;
+            context.YLowBits = buffer.YLowBits;
+            context.BufferShiftY = buffer.BufferShiftY;
+            context.XMask = buffer.XMask;
+            context.XLowBits = buffer.XLowBits;
             
             Vector2 subsampleOffset = default;
             if (buffer.Subsample) {
@@ -951,12 +994,25 @@ namespace dairin0d.Rendering {
                 if ((maxLevel == 0) | ((ixMin == ixMax) & (iyMin == iyMax))) {
                     // Draw, if reached the leaf level or node occupies 1 pixel on screen
                     for (int y = iyMin; y <= iyMax; y++) {
+                        #if COORDS_SCANLINE
                         var bufY = context.buffer + (y << context.bufferShift);
+                        #elif COORDS_TILE_Y
+                        var bufY = context.buffer + (((y << context.BufferShiftX) | y) & context.YMask);
+                        #elif COORDS_TILE_X
+                        var bufY = context.buffer + (y << context.XLowBits);
+                        #endif
                         for (int x = ixMin; x <= ixMax; x++) {
-                            bufY[x].id += 1;
-                            if (iz < (bufY[x].depth & int.MaxValue)) {
-                                bufY[x].color = parentColor;
-                                bufY[x].depth = iz;
+                            #if COORDS_SCANLINE
+                            var pixel = bufY + x;
+                            #elif COORDS_TILE_Y
+                            var pixel = bufY + (x << context.YLowBits);
+                            #elif COORDS_TILE_X
+                            var pixel = bufY + (((x << context.BufferShiftY) | x) & context.XMask);
+                            #endif
+                            pixel->id += 1;
+                            if (iz < (pixel->depth & int.MaxValue)) {
+                                pixel->color = parentColor;
+                                pixel->depth = iz;
                             }
                         }
                     }
@@ -964,10 +1020,23 @@ namespace dairin0d.Rendering {
                 } else {
                     // Occlusion test
                     for (int y = iyMin; y <= iyMax; y++) {
+                        #if COORDS_SCANLINE
                         var bufY = context.buffer + (y << context.bufferShift);
+                        #elif COORDS_TILE_Y
+                        var bufY = context.buffer + (((y << context.BufferShiftX) | y) & context.YMask);
+                        #elif COORDS_TILE_X
+                        var bufY = context.buffer + (y << context.XLowBits);
+                        #endif
                         for (int x = ixMin; x <= ixMax; x++) {
-                            bufY[x].id += 1;
-                            if (iz < (bufY[x].depth & int.MaxValue)) {
+                            #if COORDS_SCANLINE
+                            var pixel = bufY + x;
+                            #elif COORDS_TILE_Y
+                            var pixel = bufY + (x << context.YLowBits);
+                            #elif COORDS_TILE_X
+                            var pixel = bufY + (((x << context.BufferShiftY) | x) & context.XMask);
+                            #endif
+                            pixel->id += 1;
+                            if (iz < (pixel->depth & int.MaxValue)) {
                                 minY = y;
                                 goto traverse;
                             }
@@ -1211,10 +1280,23 @@ namespace dairin0d.Rendering {
             {
                 var state = curr->state;
                 for (int y = state.y0; y <= state.y1; y++) {
+                    #if COORDS_SCANLINE
                     var bufY = context.buffer + (y << context.bufferShift);
+                    #elif COORDS_TILE_Y
+                    var bufY = context.buffer + (((y << context.BufferShiftX) | y) & context.YMask);
+                    #elif COORDS_TILE_X
+                    var bufY = context.buffer + (y << context.XLowBits);
+                    #endif
                     for (int x = state.x0; x <= state.x1; x++) {
-                        bufY[x].id += 1;
-                        bufY[x].stencil = 0;
+                        #if COORDS_SCANLINE
+                        var pixel = bufY + x;
+                        #elif COORDS_TILE_Y
+                        var pixel = bufY + (x << context.YLowBits);
+                        #elif COORDS_TILE_X
+                        var pixel = bufY + (((x << context.BufferShiftY) | x) & context.XMask);
+                        #endif
+                        pixel->id += 1;
+                        pixel->stencil = 0;
                     }
                 }
             }
@@ -1231,10 +1313,23 @@ namespace dairin0d.Rendering {
                 
                 // Occlusion test
                 for (int y = state.y0; y <= state.y1; y++) {
+                    #if COORDS_SCANLINE
                     var bufY = context.buffer + (y << context.bufferShift);
+                    #elif COORDS_TILE_Y
+                    var bufY = context.buffer + (((y << context.BufferShiftX) | y) & context.YMask);
+                    #elif COORDS_TILE_X
+                    var bufY = context.buffer + (y << context.XLowBits);
+                    #endif
                     for (int x = state.x0; x <= state.x1; x++) {
-                        bufY[x].id += 1;
-                        if ((state.z < bufY[x].depth) & (bufY[x].stencil == 0)) {
+                        #if COORDS_SCANLINE
+                        var pixel = bufY + x;
+                        #elif COORDS_TILE_Y
+                        var pixel = bufY + (x << context.YLowBits);
+                        #elif COORDS_TILE_X
+                        var pixel = bufY + (((x << context.BufferShiftY) | x) & context.XMask);
+                        #endif
+                        pixel->id += 1;
+                        if ((state.z < pixel->depth) & (pixel->stencil == 0)) {
                             lastY = y;
                             goto traverse;
                         }
@@ -1317,17 +1412,30 @@ namespace dairin0d.Rendering {
                     int sy0 = (state.y0 << SubpixelShift) + SubpixelHalf - (state.y - mapHalf);
                     
                     for (int y = state.y0, my = sy0; y <= state.y1; y++, my += SubpixelSize) {
+                        #if COORDS_SCANLINE
                         var bufY = context.buffer + (y << context.bufferShift);
+                        #elif COORDS_TILE_Y
+                        var bufY = context.buffer + (((y << context.BufferShiftX) | y) & context.YMask);
+                        #elif COORDS_TILE_X
+                        var bufY = context.buffer + (y << context.XLowBits);
+                        #endif
                         int maskY = context.ymap[my >> toMapShift] & nodeMask;
                         for (int x = state.x0, mx = sx0; x <= state.x1; x++, mx += SubpixelSize) {
+                            #if COORDS_SCANLINE
+                            var pixel = bufY + x;
+                            #elif COORDS_TILE_Y
+                            var pixel = bufY + (x << context.YLowBits);
+                            #elif COORDS_TILE_X
+                            var pixel = bufY + (((x << context.BufferShiftY) | x) & context.XMask);
+                            #endif
                             int mask = context.xmap[mx >> toMapShift] & maskY;
-                            if ((mask != 0) & (state.z < bufY[x].depth) & (bufY[x].stencil == 0)) {
+                            if ((mask != 0) & (state.z < pixel->depth) & (pixel->stencil == 0)) {
                                 int octant = unchecked((int)(forwardQueues[mask] & 7));
                                 int z = state.z + (deltas[octant].z >> state.depth);
-                                bufY[x].id += 1;
-                                if (z < bufY[x].depth) {
+                                pixel->id += 1;
+                                if (z < pixel->depth) {
                                     var color24 = info8[octant].Color;
-                                    bufY[x].color = new Color32 {
+                                    pixel->color = new Color32 {
                                         // r = color24.R,
                                         // g = color24.G,
                                         // b = color24.B,
@@ -1336,8 +1444,8 @@ namespace dairin0d.Rendering {
                                         b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
                                         a = 255
                                     };
-                                    bufY[x].depth = z;
-                                    bufY[x].stencil = 1;
+                                    pixel->depth = z;
+                                    pixel->stencil = 1;
                                 }
                             }
                         }
