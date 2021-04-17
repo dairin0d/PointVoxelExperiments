@@ -39,7 +39,9 @@ namespace dairin0d.Tests {
                 for (int y = 0; y < Counts.y; y++) {
                     for (int x = 0; x < Counts.x; x++) {
                         var offset = new Vector3(x * Steps.x, y * Steps.y, z * Steps.z) - center;
-                        var instance = Instantiate(gameObject, position + offset, rotation, parent);
+                        var instance = Instantiate(gameObject, parent);
+                        instance.transform.localPosition = position + offset;
+                        instance.transform.localRotation = rotation;
                         var duplicator = instance.GetComponent<GridDuplicator>();
                         Destroy(duplicator);
                     }
