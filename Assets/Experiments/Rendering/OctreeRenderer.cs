@@ -555,6 +555,8 @@ namespace dairin0d.Rendering {
         
         public float DistortionTolerance = 1;
         
+        public bool DrawCubes = false;
+        
         int GeneralNodeCount;
         int AffineNodeCount;
         
@@ -697,6 +699,7 @@ namespace dairin0d.Rendering {
             sliderWidgets.Add(new Widget<float>("Distortion", () => DistortionTolerance, (value) => { DistortionTolerance = value; }, 0.25f, 8f));
             sliderWidgets.Add(new Widget<float>("BlendFactor", () => BlendFactor, (value) => { BlendFactor = (int)value; }, 0, 255));
 
+            toggleWidgets.Add(new Widget<bool>("Draw Cubes", () => DrawCubes, (value) => { DrawCubes = value; }));
             toggleWidgets.Add(new Widget<bool>("Update Cache", () => UpdateCache, (value) => { UpdateCache = value; }));
         }
         
@@ -936,7 +939,7 @@ namespace dairin0d.Rendering {
             if (boundsMin.z > context.zNear) {
                 int iz = (int)((boundsMin.z - context.zNear) * context.depthScale);
                 
-                if ((maxLevel == 0) | ((ixMin == ixMax) & (iyMin == iyMax))) {
+                if ((!DrawCubes & (maxLevel == 0)) | ((ixMin == ixMax) & (iyMin == iyMax))) {
                     // Draw, if reached the leaf level or node occupies 1 pixel on screen
                     for (int y = iyMin; y <= iyMax; y++) {
                         var bufY = context.buffer + (y << context.bufferShift);
@@ -1010,38 +1013,35 @@ namespace dairin0d.Rendering {
             var index8 = context.writeIndexCache + subParentOffset;
             var index8read = index8;
             
-            // Write reference to this cached node in the parent
-            context.writeIndexCache[parentOffset] = context.writeIndex;
-            
-            // Clear the cached node references
-            *((IndexCache8*)index8) = emptyIndices;
-            
-            if (readIndex < 0) {
-                loadFunc(loadAddress, info8, nodes, colors);
-                LoadedCount++;
-            } else {
-                // int _readIndex = readIndex >> 8;
-                // index8read = context.readIndexCache + (_readIndex << 3);
-                // *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[_readIndex];
-                index8read = context.readIndexCache + (readIndex << 3);
-                *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[readIndex];
+            if (readIndex != int.MinValue) {
+                // Write reference to this cached node in the parent
+                context.writeIndexCache[parentOffset] = context.writeIndex;
+                
+                // Clear the cached node references
+                *((IndexCache8*)index8) = emptyIndices;
+                
+                if (readIndex < 0) {
+                    loadFunc(loadAddress, info8, nodes, colors);
+                    LoadedCount++;
+                } else {
+                    // int _readIndex = readIndex >> 8;
+                    // index8read = context.readIndexCache + (_readIndex << 3);
+                    // *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[_readIndex];
+                    index8read = context.readIndexCache + (readIndex << 3);
+                    *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[readIndex];
+                }
+                
+                context.writeIndex += 1;
             }
             
-            context.writeIndex += 1;
-            
             ///////////////////////////////////////////
+            
+            bool isCube = DrawCubes & (maxLevel < 1);
+            bool isAlmostCube = DrawCubes & (maxLevel == 1);
             
             // Process subnodes
             for (; queue != 0; queue >>= 4) {
                 int octant = unchecked((int)(queue & 7));
-                
-                int octantParentOffset = subParentOffset | octant;
-                int octantMask = info8[octant].Mask;
-                int octantReadIndex = index8read[octant];
-                // int octantReadIndex = (index8read[octant] << 8) | info8[octant].Mask;
-                int octantLoadAddress = info8[octant].Address;
-                var octantColor24 = info8[octant].Color;
-                var octantColor = new Color32 {r = octantColor24.R, g = octantColor24.G, b = octantColor24.B, a = 255};
                 
                 var octantGrid = projectedGrid + GridVertexCount;
                 var octantCorners = context.subgridCornerIndices + (octant << 3);
@@ -1049,10 +1049,43 @@ namespace dairin0d.Rendering {
                     octantGrid[context.gridCornerIndices[corner]] = projectedGrid[octantCorners[corner]];
                 }
                 
-                RenderGeometry(ref context, octantGrid,
-                    ref matrix, octantReadIndex, octantMask, loadFunc,
-                    maxLevel-1, octantLoadAddress, octantColor, nodes, colors,
-                    ref emptyIndices, minY, octantParentOffset);
+                if (isCube) {
+                    int octantParentOffset = -1;
+                    int octantMask = 0xFF;
+                    int octantReadIndex = int.MinValue;
+                    int octantLoadAddress = -1;
+                    var octantColor = parentColor;
+                    
+                    RenderGeometry(ref context, octantGrid,
+                        ref matrix, octantReadIndex, octantMask, loadFunc,
+                        maxLevel-1, octantLoadAddress, octantColor, nodes, colors,
+                        ref emptyIndices, minY, octantParentOffset);
+                } else if (isAlmostCube) {
+                    int octantParentOffset = -1;
+                    int octantMask = 0xFF;
+                    int octantReadIndex = int.MinValue;
+                    int octantLoadAddress = -1;
+                    var octantColor24 = info8[octant].Color;
+                    var octantColor = new Color32 {r = octantColor24.R, g = octantColor24.G, b = octantColor24.B, a = 255};
+                    
+                    RenderGeometry(ref context, octantGrid,
+                        ref matrix, octantReadIndex, octantMask, loadFunc,
+                        maxLevel-1, octantLoadAddress, octantColor, nodes, colors,
+                        ref emptyIndices, minY, octantParentOffset);
+                } else {
+                    int octantParentOffset = subParentOffset | octant;
+                    int octantMask = info8[octant].Mask;
+                    int octantReadIndex = index8read[octant];
+                    // int octantReadIndex = (index8read[octant] << 8) | info8[octant].Mask;
+                    int octantLoadAddress = info8[octant].Address;
+                    var octantColor24 = info8[octant].Color;
+                    var octantColor = new Color32 {r = octantColor24.R, g = octantColor24.G, b = octantColor24.B, a = 255};
+                    
+                    RenderGeometry(ref context, octantGrid,
+                        ref matrix, octantReadIndex, octantMask, loadFunc,
+                        maxLevel-1, octantLoadAddress, octantColor, nodes, colors,
+                        ref emptyIndices, minY, octantParentOffset);
+                }
             }
         }
         
@@ -1248,31 +1281,36 @@ namespace dairin0d.Rendering {
                 var index8 = context.writeIndexCache + subParentOffset;
                 var index8read = index8;
                 
-                // Write reference to this cached node in the parent
-                context.writeIndexCache[state.parentOffset] = context.writeIndex;
-                
-                // Clear the cached node references
-                *((IndexCache8*)index8) = emptyIndices;
-                
-                if (state.readIndex < 0) {
-                    // loadFunc(state.loadAddress, info8, nodes, colors);
-                    loadFunc(state.info.Address, info8, nodes, colors);
-                    LoadedCount++;
-                } else {
-                    // int _readIndex = state.readIndex >> 8;
-                    // index8read = context.readIndexCache + (_readIndex << 3);
-                    // *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[_readIndex];
-                    index8read = context.readIndexCache + (state.readIndex << 3);
-                    *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[state.readIndex];
+                if (state.readIndex != int.MinValue) {
+                    // Write reference to this cached node in the parent
+                    context.writeIndexCache[state.parentOffset] = context.writeIndex;
+                    
+                    // Clear the cached node references
+                    *((IndexCache8*)index8) = emptyIndices;
+                    
+                    if (state.readIndex < 0) {
+                        // loadFunc(state.loadAddress, info8, nodes, colors);
+                        loadFunc(state.info.Address, info8, nodes, colors);
+                        LoadedCount++;
+                    } else {
+                        // int _readIndex = state.readIndex >> 8;
+                        // index8read = context.readIndexCache + (_readIndex << 3);
+                        // *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[_readIndex];
+                        index8read = context.readIndexCache + (state.readIndex << 3);
+                        *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[state.readIndex];
+                    }
+                    
+                    context.writeIndex += 1;
                 }
-                
-                context.writeIndex += 1;
                 
                 ///////////////////////////////////////////
                 
                 bool sizeCondition = (state.x1-state.x0 < splatAt) & (state.y1-state.y0 < splatAt);
-                bool shouldDraw = (state.level >= maxLevel) | sizeCondition;
+                bool shouldDraw = (!DrawCubes & (state.level >= maxLevel)) | sizeCondition;
                 shouldDraw |= !updateCache & (state.readIndex < 0);
+                
+                bool isCube = DrawCubes & (state.level > maxLevel);
+                bool isAlmostCube = DrawCubes & (state.level == maxLevel);
                 
                 // int nodeMask = state.readIndex & 0xFF;
                 int nodeMask = state.info.Mask;
@@ -1310,12 +1348,22 @@ namespace dairin0d.Rendering {
                         curr->x1 = x1;
                         curr->y1 = y1;
                         
-                        curr->parentOffset = subParentOffset | octant;
-                        // curr->readIndex = (index8read[octant] << 8) | info8[octant].Mask;
-                        // curr->loadAddress = info8[octant].Address;
-                        // curr->color = info8[octant].Color;
-                        curr->readIndex = index8read[octant];
-                        curr->info = info8[octant];
+                        if (isCube) {
+                            curr->readIndex = int.MinValue;
+                            curr->info.Color = state.info.Color;
+                            curr->info.Mask = 0xFF;
+                        } else if (isAlmostCube) {
+                            curr->readIndex = int.MinValue;
+                            curr->info = info8[octant];
+                            curr->info.Mask = 0xFF;
+                        } else {
+                            curr->parentOffset = subParentOffset | octant;
+                            // curr->readIndex = (index8read[octant] << 8) | info8[octant].Mask;
+                            // curr->loadAddress = info8[octant].Address;
+                            // curr->color = info8[octant].Color;
+                            curr->readIndex = index8read[octant];
+                            curr->info = info8[octant];
+                        }
                     }
                 } else {
                     int mapHalf = 1 << (SubpixelShift + potShift - state.level);
@@ -1334,19 +1382,28 @@ namespace dairin0d.Rendering {
                                 int z = state.z + (deltas[octant].z >> state.level);
                                 pixel->id += 1;
                                 if (z < pixel->depth) {
-                                    var color24 = info8[octant].Color;
-                                    pixel->color = new Color32 {
-                                        // r = color24.R,
-                                        // g = color24.G,
-                                        // b = color24.B,
-                                        // r = (byte)((color24.R * blendFactorInv + state.color.R * blendFactor + 255) >> 8),
-                                        // g = (byte)((color24.G * blendFactorInv + state.color.G * blendFactor + 255) >> 8),
-                                        // b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
-                                        r = (byte)((color24.R * blendFactorInv + state.info.Color.R * blendFactor + 255) >> 8),
-                                        g = (byte)((color24.G * blendFactorInv + state.info.Color.G * blendFactor + 255) >> 8),
-                                        b = (byte)((color24.B * blendFactorInv + state.info.Color.B * blendFactor + 255) >> 8),
-                                        a = 255
-                                    };
+                                    if (isCube) {
+                                        pixel->color = new Color32 {
+                                            r = state.info.Color.R,
+                                            g = state.info.Color.G,
+                                            b = state.info.Color.B,
+                                            a = 255
+                                        };
+                                    } else {
+                                        var color24 = info8[octant].Color;
+                                        pixel->color = new Color32 {
+                                            // r = color24.R,
+                                            // g = color24.G,
+                                            // b = color24.B,
+                                            // r = (byte)((color24.R * blendFactorInv + state.color.R * blendFactor + 255) >> 8),
+                                            // g = (byte)((color24.G * blendFactorInv + state.color.G * blendFactor + 255) >> 8),
+                                            // b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
+                                            r = (byte)((color24.R * blendFactorInv + state.info.Color.R * blendFactor + 255) >> 8),
+                                            g = (byte)((color24.G * blendFactorInv + state.info.Color.G * blendFactor + 255) >> 8),
+                                            b = (byte)((color24.B * blendFactorInv + state.info.Color.B * blendFactor + 255) >> 8),
+                                            a = 255
+                                        };
+                                    }
                                     pixel->depth = z | int.MinValue;
                                 }
                             }
