@@ -564,8 +564,6 @@ namespace dairin0d.Rendering {
         
         public int SplatAt = 2;
         
-        public int BlendFactor = 0;
-        
         public float DistortionTolerance = 1;
         
         public bool DrawCubes = false;
@@ -715,7 +713,6 @@ namespace dairin0d.Rendering {
             sliderWidgets.Add(new Widget<float>("MapShift", () => MapShift, (value) => { MapShift = (int)value; }, OctantMap.MinShift, OctantMap.MaxShift));
             sliderWidgets.Add(new Widget<float>("Splat At", () => SplatAt, (value) => { SplatAt = (int)value; }, 1, 8));
             sliderWidgets.Add(new Widget<float>("Distortion", () => DistortionTolerance, (value) => { DistortionTolerance = value; }, 0.25f, 8f));
-            sliderWidgets.Add(new Widget<float>("BlendFactor", () => BlendFactor, (value) => { BlendFactor = (int)value; }, 0, 255));
             sliderWidgets.Add(new Widget<float>("RadiusShift", () => RadiusShift, (value) => { RadiusShift = (int)value; }, 0, 8));
 
             toggleWidgets.Add(new Widget<bool>("Draw Circles", () => DrawCircles, (value) => { DrawCircles = value; }));
@@ -1270,9 +1267,6 @@ namespace dairin0d.Rendering {
             int r2Shift = rShift+1;
             int r2Add = rStep * rStep;
             
-            int marginX = extentX >> (potShift+1);
-            int marginY = extentY >> (potShift+1);
-            
             int forwardKey = OctantOrder.Key(in matrix);
             int reverseKey = forwardKey ^ 0b11100000000;
             uint* forwardQueues = context.queues + forwardKey;
@@ -1281,8 +1275,12 @@ namespace dairin0d.Rendering {
             int bufMask = (1 << context.bufferShift) - 1;
             int bufMaskInv = ~bufMask;
             
-            int blendFactor = BlendFactor;
+            int maxExtent = (extentX > extentY ? extentX : extentY);
+            float subpixelFactor = (maxExtent >> (maxLevel - 1)) / (float)SubpixelSize;
+            
+            int blendFactor = (int)(Mathf.Clamp01(0.5f - subpixelFactor) * 4 * 255);
             int blendFactorInv = 255 - blendFactor;
+            
             bool updateCache = UpdateCache;
             
             int splatAt = SplatAt;
@@ -1512,18 +1510,21 @@ namespace dairin0d.Rendering {
                                         };
                                     } else {
                                         var color24 = info8[octant].Color;
-                                        pixel->color = new Color32 {
-                                            // r = color24.R,
-                                            // g = color24.G,
-                                            // b = color24.B,
-                                            // r = (byte)((color24.R * blendFactorInv + state.color.R * blendFactor + 255) >> 8),
-                                            // g = (byte)((color24.G * blendFactorInv + state.color.G * blendFactor + 255) >> 8),
-                                            // b = (byte)((color24.B * blendFactorInv + state.color.B * blendFactor + 255) >> 8),
-                                            r = (byte)((color24.R * blendFactorInv + state.info.Color.R * blendFactor + 255) >> 8),
-                                            g = (byte)((color24.G * blendFactorInv + state.info.Color.G * blendFactor + 255) >> 8),
-                                            b = (byte)((color24.B * blendFactorInv + state.info.Color.B * blendFactor + 255) >> 8),
-                                            a = 255
-                                        };
+                                        if (state.level >= maxLevel) {
+                                            pixel->color = new Color32 {
+                                                r = (byte)((color24.R * blendFactorInv + state.info.Color.R * blendFactor + 255) >> 8),
+                                                g = (byte)((color24.G * blendFactorInv + state.info.Color.G * blendFactor + 255) >> 8),
+                                                b = (byte)((color24.B * blendFactorInv + state.info.Color.B * blendFactor + 255) >> 8),
+                                                a = 255
+                                            };
+                                        } else {
+                                            pixel->color = new Color32 {
+                                                r = color24.R,
+                                                g = color24.G,
+                                                b = color24.B,
+                                                a = 255
+                                            };
+                                        }
                                     }
                                     pixel->depth = z | int.MinValue;
                                 }
