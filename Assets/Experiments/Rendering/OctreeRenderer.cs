@@ -26,7 +26,7 @@ using UnityEngine;
 namespace dairin0d.Rendering {
     class Buffer {
         public struct DataItem {
-            public int stencil;
+            public int radius2;
             public int depth;
             public Color32 color;
             public int id;
@@ -94,8 +94,9 @@ namespace dairin0d.Rendering {
             Width = width;
             Height = height;
 
-            BufferShiftX = NextPow2(width);
-            BufferShiftY = NextPow2(height);
+            // BufferShiftX = NextPow2(width);
+            // BufferShiftY = NextPow2(height);
+            BufferShiftX = BufferShiftY = NextPow2(Mathf.Max(width, height));
 
             int dataSize = (1 << BufferShiftX) * (1 << BufferShiftY);
             if ((Data != null) && (Data.Length >= dataSize)) return;
@@ -213,7 +214,7 @@ namespace dairin0d.Rendering {
 
         public unsafe void Clear(Color32 background) {
             var clear_data = default(DataItem);
-            clear_data.stencil = 0;
+            clear_data.radius2 = 0;
             clear_data.depth = int.MaxValue;
             clear_data.color = background;
             clear_data.id = 0;
@@ -579,6 +580,10 @@ namespace dairin0d.Rendering {
         
         public bool DrawCubes = false;
         
+        public bool DrawCircles = false;
+        
+        public int RadiusShift = 8;
+        
         int GeneralNodeCount;
         int AffineNodeCount;
         
@@ -720,7 +725,9 @@ namespace dairin0d.Rendering {
             sliderWidgets.Add(new Widget<float>("Splat At", () => SplatAt, (value) => { SplatAt = (int)value; }, 1, 8));
             sliderWidgets.Add(new Widget<float>("Distortion", () => DistortionTolerance, (value) => { DistortionTolerance = value; }, 0.25f, 8f));
             sliderWidgets.Add(new Widget<float>("BlendFactor", () => BlendFactor, (value) => { BlendFactor = (int)value; }, 0, 255));
+            sliderWidgets.Add(new Widget<float>("RadiusShift", () => RadiusShift, (value) => { RadiusShift = (int)value; }, 0, 8));
 
+            toggleWidgets.Add(new Widget<bool>("Draw Circles", () => DrawCircles, (value) => { DrawCircles = value; }));
             toggleWidgets.Add(new Widget<bool>("Draw Cubes", () => DrawCubes, (value) => { DrawCubes = value; }));
             toggleWidgets.Add(new Widget<bool>("Update Cache", () => UpdateCache, (value) => { UpdateCache = value; }));
         }
@@ -961,16 +968,56 @@ namespace dairin0d.Rendering {
             if (boundsMin.z > context.zNear) {
                 int iz = (int)((boundsMin.z - context.zNear) * context.depthScale);
                 
-                if ((!DrawCubes & (maxLevel == 0)) | ((ixMin == ixMax) & (iyMin == iyMax))) {
-                    // Draw, if reached the leaf level or node occupies 1 pixel on screen
-                    for (int y = iyMin; y <= iyMax; y++) {
-                        var bufY = context.buffer + (y << context.bufferShift);
-                        for (int x = ixMin; x <= ixMax; x++) {
-                            var pixel = bufY + x;
-                            pixel->id += 1;
-                            if (iz < (pixel->depth & int.MaxValue)) {
-                                pixel->color = parentColor;
-                                pixel->depth = iz;
+                bool isSinglePixel = (ixMin == ixMax) & (iyMin == iyMax);
+                
+                if ((!DrawCubes & (maxLevel == 0)) | isSinglePixel) {
+                    if (DrawCircles & !isSinglePixel) {
+                        float cx = (boundsMin.x + boundsMax.x) * 0.5f;
+                        float cy = (boundsMin.y + boundsMax.y) * 0.5f;
+                        float dx = boundsMax.x - boundsMin.x;
+                        float dy = boundsMax.y - boundsMin.y;
+                        float r = (float)System.Math.Sqrt((dx*dx + dy*dy) * 0.25f);
+                        float fxMin = cx - r, fyMin = cy - r, fxMax = cx + r, fyMax = cy + r;
+                        
+                        ixMin = (int)((fxMin > context.xMin ? fxMin : context.xMin) + context.xCenter + 0.5f);
+                        iyMin = (int)((fyMin > context.yMin ? fyMin : context.yMin) + context.yCenter + 0.5f);
+                        ixMax = (int)((fxMax < context.xMax ? fxMax : context.xMax) + context.xCenter - 0.5f);
+                        iyMax = (int)((fyMax < context.yMax ? fyMax : context.yMax) + context.yCenter - 0.5f);
+                        
+                        int icx = (int)(cx + context.xCenter);
+                        int icy = (int)(cy + context.yCenter);
+                        int r2max = (int)(r + 0.5f);
+                        r2max *= r2max;
+                        
+                        int idx = ixMin - icx, idy = iyMin - icy;
+                        int r2y = idx*idx + idy*idy;
+                        for (int y = iyMin; y <= iyMax; y++) {
+                            var bufY = context.buffer + (y << context.bufferShift);
+                            int _idx = idx, r2 = r2y;
+                            for (int x = ixMin; x <= ixMax; x++) {
+                                var pixel = bufY + x;
+                                pixel->id += 1;
+                                if ((iz < (pixel->depth & int.MaxValue)) & (r2 <= r2max)) {
+                                    pixel->color = parentColor;
+                                    pixel->depth = iz;
+                                }
+                                r2 += _idx + _idx + 1;
+                                _idx++;
+                            }
+                            r2y += idy + idy + 1;
+                            idy++;
+                        }
+                    } else {
+                        // Draw, if reached the leaf level or node occupies 1 pixel on screen
+                        for (int y = iyMin; y <= iyMax; y++) {
+                            var bufY = context.buffer + (y << context.bufferShift);
+                            for (int x = ixMin; x <= ixMax; x++) {
+                                var pixel = bufY + x;
+                                pixel->id += 1;
+                                if (iz < (pixel->depth & int.MaxValue)) {
+                                    pixel->color = parentColor;
+                                    pixel->depth = iz;
+                                }
                             }
                         }
                     }
@@ -1217,9 +1264,19 @@ namespace dairin0d.Rendering {
             int readIndex, int parentMask, LoadFuncDelegate loadFunc, ref IndexCache8 emptyIndices, int parentOffset = 0)
         {
             SetupAffine(ref context, in matrix, out int potShift,
-                out int centerX, out int centerY, out int extentX, out int extentY, out int startZ);
+                out int centerX, out int centerY, out int extentX, out int extentY, out int startZ, out float radius);
             
             if (maxLevel > potShift+1) maxLevel = potShift+1;
+            
+            int r = Mathf.CeilToInt(SubpixelSize * radius * Mathf.Sqrt(1.5f)) + SubpixelHalf;
+            r >>= maxLevel;
+            int rShift = Mathf.Min(RadiusShift, SubpixelShift);
+            int drShift = SubpixelShift - rShift;
+            int r2max = r >> drShift;
+            r2max = r2max * r2max;
+            int rStep = 1 << rShift;
+            int r2Shift = rShift+1;
+            int r2Add = rStep * rStep;
             
             int marginX = extentX >> (potShift+1);
             int marginY = extentY >> (potShift+1);
@@ -1387,6 +1444,56 @@ namespace dairin0d.Rendering {
                             curr->info = info8[octant];
                         }
                     }
+                } else if (DrawCircles & !sizeCondition) {
+                    var queue = forwardQueues[nodeMask];
+                    
+                    int subExtentX = (extentX >> state.level) - SubpixelHalf;
+                    int subExtentY = (extentY >> state.level) - SubpixelHalf;
+                    
+                    for (; queue != 0; queue >>= 4) {
+                        int octant = unchecked((int)(queue & 7));
+                        
+                        int cx = (state.x + (deltas[octant].x >> state.level));
+                        int cy = (state.y + (deltas[octant].y >> state.level));
+                        
+                        int x0 = (cx - r) >> SubpixelShift; if (x0 < 0) x0 = 0;
+                        int y0 = (cy - r) >> SubpixelShift; if (y0 < 0) y0 = 0;
+                        int x1 = (cx + r) >> SubpixelShift; if (x1 >= context.width) x1 = context.width-1;
+                        int y1 = (cy + r) >> SubpixelShift; if (y1 >= context.height) y1 = context.height-1;
+                        
+                        if ((x0 > x1) | (y0 > y1)) continue;
+                        
+                        int icx = cx >> SubpixelShift;
+                        int icy = cy >> SubpixelShift;
+                        
+                        int z = state.z + (deltas[octant].z >> state.level);
+                        
+                        int idx = ((x0 - icx) << rShift) + ((SubpixelHalf - (cx & SubpixelMask)) >> drShift);
+                        int idy = ((y0 - icy) << rShift) + ((SubpixelHalf - (cy & SubpixelMask)) >> drShift);
+                        int r2y = idx*idx + idy*idy;
+                        for (int y = y0; y <= y1; y++) {
+                            var bufY = context.buffer + (y << context.bufferShift);
+                            int _idx = idx, r2 = r2y;
+                            for (int x = x0; x <= x1; x++) {
+                                var pixel = bufY + x;
+                                pixel->id += 1;
+                                if ((z < (pixel->depth & int.MaxValue)) & (r2 <= r2max)) {
+                                    var color24 = info8[octant].Color;
+                                    pixel->color = new Color32 {
+                                        r = color24.R,
+                                        g = color24.G,
+                                        b = color24.B,
+                                        a = 255
+                                    };
+                                    pixel->depth = z | int.MinValue;
+                                }
+                                r2 += (_idx << r2Shift) + r2Add;
+                                _idx += rStep;
+                            }
+                            r2y += (idy << r2Shift) + r2Add;
+                            idy += rStep;
+                        }
+                    }
                 } else {
                     int mapHalf = 1 << (SubpixelShift + potShift - state.level);
                     int toMapShift = (SubpixelShift + potShift - state.level + 1) - octantMap.SizeShift;
@@ -1436,7 +1543,7 @@ namespace dairin0d.Rendering {
         }
         
         void SetupAffine(ref Context context, in Matrix4x4 matrix, out int potShift,
-            out int Cx, out int Cy, out int extentX, out int extentY, out int minZ)
+            out int Cx, out int Cy, out int extentX, out int extentY, out int minZ, out float radius)
         {
             var X = new Vector3 {x = matrix.m00, y = matrix.m10, z = matrix.m20};
             var Y = new Vector3 {x = matrix.m01, y = matrix.m11, z = matrix.m21};
@@ -1467,6 +1574,11 @@ namespace dairin0d.Rendering {
                 Yx >>= 1; Yy >>= 1;
                 Zx >>= 1; Zy >>= 1;
             }
+            
+            float dx2 = X.x*X.x + X.y*X.y;
+            float dy2 = Y.x*Y.x + Y.y*Y.y;
+            float dz2 = Z.x*Z.x + Z.y*Z.y;
+            radius = (float)System.Math.Sqrt((dx2 + dy2 + dz2) * 0.25f);
             
             octantMap.Bake(Xx >> 1, Xy >> 1, Yx >> 1, Yy >> 1, Zx >> 1, Zy >> 1, SubpixelHalf, SubpixelHalf, SubpixelShift, 1);
             
