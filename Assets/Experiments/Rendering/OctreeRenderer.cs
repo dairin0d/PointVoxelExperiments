@@ -117,13 +117,18 @@ namespace dairin0d.Rendering {
             int h = Height;
             int shift = BufferShiftX;
 
-            bool show_depth = (depth_shift >= 0);
+            bool show_normals = (depth_shift == 0);
+            bool show_depth = (depth_shift > 0);
             bool show_complexity = (depth_shift < -1);
             int complexity_shift = -1 - depth_shift;
 
             int w2 = Texture.width, h2 = Texture.height;
             int x2step = 1, y2step = 1;
             int x2start = 0, y2start = 0;
+            
+            int xmax = w-1;
+            int ymax = h-1;
+            int ystep = 1 << shift;
             
             bool useSubsample = Subsample;
             if (Subsample) {
@@ -146,8 +151,25 @@ namespace dairin0d.Rendering {
                         byte g0 = colors_x->g;
                         byte b0 = colors_x->b;
                         
-                        if (show_depth) {
-                            byte d = (byte)(data_x->depth >> depth_shift);
+                        if (show_normals) {
+                            int vC = data_x->depth & int.MaxValue;
+                            int dL = (x == 0) ? int.MaxValue : vC - ((data_x-1)->depth & int.MaxValue);
+                            int dR = (x == xmax) ? int.MaxValue : ((data_x+1)->depth & int.MaxValue) - vC;
+                            int dD = (y == 0) ? int.MaxValue : vC - ((data_x-ystep)->depth & int.MaxValue);
+                            int dU = (y == ymax) ? int.MaxValue : ((data_x+ystep)->depth & int.MaxValue) - vC;
+                            int aL = (dL < 0 ? -dL : dL);
+                            int aR = (dR < 0 ? -dR : dR);
+                            int aD = (dD < 0 ? -dD : dD);
+                            int aU = (dU < 0 ? -dU : dU);
+                            int dX = (aL < aR ? dL : dR);
+                            int dY = (aD < aU ? dD : dU);
+                            float scale = 127f / (float) System.Math.Sqrt(dX*dX + dY*dY + 256*256);
+                            colors_x->r = (byte)(128 + dX * scale);
+                            colors_x->g = (byte)(128 + dY * scale);
+                            colors_x->b = 128;
+                            colors_x->a = 255;
+                        } else if (show_depth) {
+                            byte d = (byte)((data_x->depth & int.MaxValue) >> depth_shift);
                             colors_x->r = colors_x->g = colors_x->b = d;
                             colors_x->a = 255;
                         } else if (show_complexity) {
