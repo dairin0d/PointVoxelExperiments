@@ -529,38 +529,28 @@ namespace dairin0d.Rendering {
             public NodeCacheItem n0, n1, n2, n3, n4, n5, n6, n7;
         }
         
+        const int CacheStorageCount = 2*1024*1024;
+        int currentCacheIndex = 0;
+        
         class NodeCache {
-            public int[] indexCache0;
-            public int[] indexCache1;
-            public NodeInfo[] infoCache0;
-            public NodeInfo[] infoCache1;
-            public Dictionary<(ModelInstance, Model3D, int, int), int> sourceCacheOffsets;
-            public Dictionary<(ModelInstance, Model3D, int, int), int> targetCacheOffsets;
+            public int[] indices;
+            public NodeInfo[] infos;
+            public Dictionary<(ModelInstance, Model3D, int, int), int> offsets;
             
             public NodeCache(int count) {
                 int size = count * 8;
-                indexCache0 = new int[size];
-                indexCache1 = new int[size];
-                infoCache0 = new NodeInfo[size];
-                infoCache1 = new NodeInfo[size];
-                sourceCacheOffsets = new Dictionary<(ModelInstance, Model3D, int, int), int>();
-                targetCacheOffsets = new Dictionary<(ModelInstance, Model3D, int, int), int>();
-            }
-            
-            public void Swap() {
-                (indexCache0, indexCache1) = (indexCache1, indexCache0);
-                (infoCache0, infoCache1) = (infoCache1, infoCache0);
-                (sourceCacheOffsets, targetCacheOffsets) = (targetCacheOffsets, sourceCacheOffsets);
+                indices = new int[size];
+                infos = new NodeInfo[size];
+                offsets = new Dictionary<(ModelInstance, Model3D, int, int), int>();
             }
         }
-        const int CacheStorageCount = 2*1024*1024;
         NodeCache[] caches = new NodeCache[] {
             new NodeCache(CacheStorageCount),
             new NodeCache(CacheStorageCount),
             new NodeCache(CacheStorageCount),
             new NodeCache(CacheStorageCount),
         };
-        int currentCacheIndex = 0;
+        NodeCache cacheSwap = new NodeCache(CacheStorageCount);
         
         public int MapShift = 4;
         OctantMap octantMap = new OctantMap();
@@ -703,7 +693,8 @@ namespace dairin0d.Rendering {
             public ProjectedVertex* projectedGridsStack;
             public ModelInstance instance;
             public Model3D model;
-            public NodeCache cache;
+            public NodeCache sourceCache;
+            public NodeCache targetCache;
             public int width, height, bufferShift;
             public float xCenter, yCenter, pixelScale;
             public float xMin, yMin, xMax, yMax; // in clip space
@@ -776,30 +767,31 @@ namespace dairin0d.Rendering {
             if (buffer.Subsample) {
                 currentCacheIndex = context.currentFrame & 0b11;
             }
-            context.cache = caches[currentCacheIndex];
-
+            context.sourceCache = caches[currentCacheIndex];
+            context.targetCache = cacheSwap;
+            
             CacheCount = 0;
             LoadedCount = 0;
             GeneralNodeCount = 0;
             AffineNodeCount = 0;
-            context.cache.targetCacheOffsets.Clear();
+            context.targetCache.offsets.Clear();
             
             octantMap.Resize(MapShift);
-
+            
             // The zeroth element is used for "writing cached parent reference" of root nodes
             // (the value is not used, this just avoids extra checks)
             context.writeIndex = 2;
-
+            
             fixed (Buffer.DataItem* buf = buffer.Data)
             fixed (uint* queues = OctantOrder.Queues)
             fixed (Delta* deltas = this.deltas)
             fixed (NodeState* stack = this.stack)
             fixed (byte* xmap = octantMap.DataX)
             fixed (byte* ymap = octantMap.DataY)
-            fixed (int* readIndexCache = context.cache.indexCache0)
-            fixed (int* writeIndexCache = context.cache.indexCache1)
-            fixed (NodeInfo* readInfoCache = context.cache.infoCache0)
-            fixed (NodeInfo* writeInfoCache = context.cache.infoCache1)
+            fixed (int* readIndexCache = context.sourceCache.indices)
+            fixed (int* writeIndexCache = context.targetCache.indices)
+            fixed (NodeInfo* readInfoCache = context.sourceCache.infos)
+            fixed (NodeInfo* writeInfoCache = context.targetCache.infos)
             fixed (int* gridCornerIndices = GridCornerIndices)
             fixed (int* gridSubdivisionIndices = GridSubdivisionIndices)
             fixed (int* subgridCornerIndices = SubgridCornerIndices)
@@ -839,7 +831,7 @@ namespace dairin0d.Rendering {
             
             CacheCount = context.writeIndex;
             
-            context.cache.Swap();
+            (caches[currentCacheIndex], cacheSwap) = (cacheSwap, caches[currentCacheIndex]);
         }
         
         unsafe void ProjectCageVertices(ref Context context, ref Matrix4x4 modelViewMatrix) {
@@ -927,7 +919,7 @@ namespace dairin0d.Rendering {
                     
                     int writeIndexStart = context.writeIndex;
                     
-                    if (!context.cache.sourceCacheOffsets.TryGetValue(cacheOffsetKey, out var readIndex)) {
+                    if (!context.sourceCache.offsets.TryGetValue(cacheOffsetKey, out var readIndex)) {
                         readIndex = -1;
                     }
                     
@@ -937,7 +929,7 @@ namespace dairin0d.Rendering {
                         readIndex, mask, LoadNode, maxLevel, node, color, nodes, colors, ref emptyIndices);
                     
                     if (context.writeIndex > writeIndexStart) {
-                        context.cache.targetCacheOffsets[cacheOffsetKey] = writeIndexStart;
+                        context.targetCache.offsets[cacheOffsetKey] = writeIndexStart;
                     }
                 }
             }
