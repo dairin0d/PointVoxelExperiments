@@ -54,7 +54,7 @@ namespace dairin0d.Controls {
 					if (Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl)) speed_v *= speed_modifier;
 				}
 
-				transform.position += speed_v * speed;
+				transform.position += speed_v * speed * Time.deltaTime;
 				transform.rotation = Quaternion.LookRotation(dir_forward);
 			}
 

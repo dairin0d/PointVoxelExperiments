@@ -412,7 +412,7 @@ namespace dairin0d.Rendering {
             SliderWidgets.Add(new Widget<float>("Depth View", () => DepthDisplayShift, (value) => { DepthDisplayShift = (int)value; }, -8, 24));
 
             if (Controller) {
-                SliderWidgets.Add(new Widget<float>("Move Speed", () => Controller.speed, (value) => { Controller.speed = value; }, 0.01f, 0.5f));
+                SliderWidgets.Add(new Widget<float>("Move Speed", () => Controller.speed, (value) => { Controller.speed = value; }, 0.1f, 5f));
             }
 
             ToggleWidgets.Clear();
@@ -582,7 +582,7 @@ namespace dairin0d.Rendering {
         
         public bool DrawCircles = false;
         
-        public int RadiusShift = 8;
+        public int RadiusShift = 3;
         
         int GeneralNodeCount;
         int AffineNodeCount;
