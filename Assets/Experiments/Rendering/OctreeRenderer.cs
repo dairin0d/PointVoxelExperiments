@@ -658,7 +658,7 @@ namespace dairin0d.Rendering {
 
             sliderWidgets.Add(new Widget<float>("Level", () => MaxLevel, (value) => { MaxLevel = (int)value; }, 0, 16));
             sliderWidgets.Add(new Widget<float>("MapShift", () => MapShift, (value) => { MapShift = (int)value; }, OctantMap.MinShift, OctantMap.MaxShift));
-            sliderWidgets.Add(new Widget<float>("Splat At", () => SplatAt, (value) => { SplatAt = (int)value; }, 1, 512));
+            sliderWidgets.Add(new Widget<float>("Splat At", () => SplatAt, (value) => { SplatAt = (int)value; }, 1, 8));
             sliderWidgets.Add(new Widget<float>("Distortion", () => DistortionTolerance, (value) => { DistortionTolerance = value; }, 0.25f, 8f));
             sliderWidgets.Add(new Widget<float>("RadiusShift", () => RadiusShift, (value) => { RadiusShift = (int)value; }, 0, 8));
 
@@ -872,6 +872,12 @@ namespace dairin0d.Rendering {
             int iyMax = (int)((boundsMax.y < context.yMax ? boundsMax.y : context.yMax) + context.yCenter - 0.5f);
             if (iyMin < minY) iyMin = minY;
             if ((ixMax < ixMin) | (iyMax < iyMin)) return;
+            
+            if (loadAddress >= 0) {
+                int chunkIndex = loadAddress >> context.chunkShift;
+                var chunkInfo = context.chunkInfos + chunkIndex;
+                if (!UpdateCache & (chunkInfo->ChunkStart < 0)) nodeMask = 0;
+            }
             
             if (maxLevel <= 0) nodeMask = 0;
             
@@ -1206,6 +1212,12 @@ namespace dairin0d.Rendering {
                 
                 var state = *curr;
                 --curr;
+                
+                if (state.info.Address >= 0) {
+                    int chunkIndex = state.info.Address >> context.chunkShift;
+                    var chunkInfo = context.chunkInfos + chunkIndex;
+                    if (!UpdateCache & (chunkInfo->ChunkStart < 0)) state.info.Mask = 0;
+                }
                 
                 if (state.level >= maxLevel) state.info.Mask = 0;
                 
