@@ -52,6 +52,12 @@ namespace dairin0d.Rendering {
         private int[] infos;
         private T[] array;
         
+        public int Depth => depthMax;
+        public int Count => depthMax < 0 ? 0 : blockSize * (1 << depthMax);
+        
+        public int ElementSize => elementSize;
+        public int MemorySize => (Count * elementSize) + (infos != null ? infos.Length * sizeof(int) : 0);
+        
         public T[] Array => array;
         
         /// <param name="blockSize">Minimal allocatable size (measured in array elements).</param>

@@ -41,6 +41,11 @@ namespace dairin0d.Rendering {
         
         public float Scale = 1;
         
+        public int BlockSizeShift = 10;
+        public bool Compress = false;
+        public bool UsePackedOctree = false;
+        public bool Preload = false;
+        
         private static Dictionary<string, Model3D> loadedModels = new Dictionary<string, Model3D>();
         
         void Awake() {
@@ -62,10 +67,14 @@ namespace dairin0d.Rendering {
         }
         
         Model3D MakeModel(RawOctree octree, string name) {
+            var chunkedOctree = (string.IsNullOrEmpty(Path) || !UsePackedOctree)
+                ? ChunkedOctree.FromRawOctree(octree.RootNode, octree.RootColor, octree.Nodes, octree.Colors)
+                : ChunkedOctree.PackRawOctree(octree.RootNode, octree.RootColor, octree.Nodes, octree.Colors, BlockSizeShift, Compress, Preload);
+            
             var model = new Model3D();
             model.Name = name;
             
-            model.Geometries = new ModelGeometry[] {octree};
+            model.Geometries = new ModelGeometry[] {chunkedOctree};
             
             model.Bounds = new Bounds(Vector3.zero, Vector3.one * Scale); // for now
             
