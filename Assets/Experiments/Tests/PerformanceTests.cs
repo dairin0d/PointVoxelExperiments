@@ -125,10 +125,15 @@ namespace dairin0d.Tests {
         
         public int Threshold;
         
+        public int POTShift = 12;
+        public int POTStep = 0;
+        
         enum TestMode {
             ManagedCopy,
             UnsafeCopy,
             PointerCopy,
+            HashCopy,
+            RandomCopy,
             IfStatement,
             IfExpression,
             Branchless,
@@ -161,7 +166,7 @@ namespace dairin0d.Tests {
         TestMode[] test_modes;
         int[] test_times;
         
-        int[] arr1, arr2;
+        int[] arr1, arr2, arrPOT1;
         byte[] arr1b;
         
         struct TestStruct {
@@ -209,11 +214,13 @@ namespace dairin0d.Tests {
             
             arr1 = new int[Count];
             arr2 = new int[Count];
+            arrPOT1 = new int[1 << POTShift];
             arr1b = new byte[Count];
             
             Random.InitState(Seed);
             for (int i = 0; i < Count; i++) {
-                arr1[i] = Random.Range(short.MinValue, short.MaxValue);
+                //arr1[i] = Random.Range(short.MinValue, short.MaxValue);
+                arr1[i] = Random.Range(0, arrPOT1.Length - 1);
                 arr1b[i] = (byte)Random.Range(byte.MinValue, byte.MaxValue);
             }
             
@@ -262,6 +269,9 @@ namespace dairin0d.Tests {
             float x = 0, y = 0, btn_w = 160, screen_w = Screen.width, line_h = 20;
             GUI.Label(new Rect(x, y, screen_w, line_h), $"Count = {Count}");
             y += line_h;
+            GUI.Label(new Rect(x, y, btn_w*0.25f, line_h), $"{POTStep}");
+            POTStep = (int) GUI.HorizontalSlider(new Rect(x+btn_w*0.25f, y, btn_w*0.75f, line_h), POTStep, 0, 16);
+            y += line_h;
             for (int test_index = 0; test_index < test_times.Length; test_index++) {
                 var test_mode = test_modes[test_index];
                 var test_time = test_times[test_index];
@@ -273,7 +283,7 @@ namespace dairin0d.Tests {
         
         unsafe void Test(int test_index, int x0b=0, int y0b=0, int x1b=640, int y1b=480, int forward_key=0, int mask=255) {
             var test_mode = test_modes[test_index];
-            fixed (int* _ptr1 = arr1, _ptr2 = arr2)
+            fixed (int* _ptr1 = arr1, _ptr2 = arr2, _ptrPOT1 = arrPOT1)
             fixed (byte* _ptr1b = arr1b)
             {
                 var ptr1 = _ptr1;
@@ -288,13 +298,42 @@ namespace dairin0d.Tests {
                         arr2[i] = arr1[i];
                     }
                 } else if (test_mode == TestMode.UnsafeCopy) {
+                    int n = arr1.Length;
                     stopwatch.Restart();
-                    for (int i = 0; i < arr1.Length; i++) {
+                    for (int i = 0; i < n; i++) {
                         ptr2[i] = ptr1[i];
                     }
                 } else if (test_mode == TestMode.PointerCopy) {
                     for (stopwatch.Restart(); ptr1 != ptr1_end; ++ptr1, ++ptr2) {
                         *ptr2 = *ptr1;
+                    }
+                } else if (test_mode == TestMode.HashCopy) {
+                    int n = arr1.Length;
+                    int a = 1327217883;
+                    int w = 32, m = POTShift, w_m = w - m;
+                    int potMask = (1 << POTShift) - 1;
+                    stopwatch.Restart();
+                    int j = 0, js = 1 << POTStep;
+                    for (int i = 0; i < n; i++) {
+                        //int j = (a * i) >> w_m;
+                        ptr2[i] = arrPOT1[j & potMask];
+                        j += js;
+                    }
+                } else if (test_mode == TestMode.RandomCopy) {
+                    // int n = arr1.Length;
+                    // int j = 1327217883;
+                    // int potMask = (1 << POTShift) - 1;
+                    // stopwatch.Restart();
+                    // for (int i = 0; i < n; i++) {
+                    //     j ^= j << 13;
+                    //     j ^= j >> 17;
+                    //     j ^= j << 5;
+                    //     ptr2[i] = arrPOT1[j & potMask];
+                    // }
+                    int n = arr1.Length;
+                    stopwatch.Restart();
+                    for (int i = 0; i < n; i++) {
+                        ptr2[i] = arrPOT1[ptr1[i]];
                     }
                 } else if (test_mode == TestMode.IfStatement) {
                     int threshold = Threshold;
