@@ -21,12 +21,13 @@
 // SOFTWARE.
 
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using UnityEngine;
 
 namespace dairin0d.Rendering {
     class Buffer {
         public struct DataItem {
-            public int radius2;
+            public int address;
             public int depth;
             public Color32 color;
             public int id;
@@ -53,8 +54,8 @@ namespace dairin0d.Rendering {
             Clear(background);
         }
         
-        public void RenderEnd(int depth_shift = -1) {
-            Blit(depth_shift);
+        public void RenderEnd(bool useAddress, int depth_shift = -1) {
+            Blit(useAddress, depth_shift);
             stopwatch.Stop();
             FrameTime = stopwatch.ElapsedMilliseconds / 1000f;
             UpdateTexture();
@@ -113,7 +114,7 @@ namespace dairin0d.Rendering {
             Texture.Apply(false);
         }
         
-        public unsafe void Blit(int depth_shift = -1) {
+        public unsafe void Blit(bool useAddress, int depth_shift = -1) {
             int w = Width;
             int h = Height;
             int shift = BufferShiftX;
@@ -138,6 +139,7 @@ namespace dairin0d.Rendering {
                 Subsampler.Get(out x2start, out y2start);
             }
 
+            fixed (OctreeNode* nodeDataPtr = ChunkedOctree.DataArray)
             fixed (DataItem* data_ptr = Data)
             fixed (Color32* colors_ptr = colors)
             {
@@ -177,6 +179,15 @@ namespace dairin0d.Rendering {
                             byte d = (byte)(data_x->id << complexity_shift);
                             colors_x->r = colors_x->g = colors_x->b = d;
                             colors_x->a = 255;
+                        } else if (useAddress & (data_x->address >= 0)) {
+                            // colors_x->r = (byte) (128 | (127 & (data_x->address >> 0)));
+                            // colors_x->g = (byte) (128 | (127 & (data_x->address >> 8)));
+                            // colors_x->b = (byte) (128 | (127 & (data_x->address >> 16)));
+                            ref var color = ref nodeDataPtr[data_x->address].BaseColor;
+                            colors_x->r = color.R;
+                            colors_x->g = color.G;
+                            colors_x->b = color.B;
+                            colors_x->a = 255;
                         } else {
                             *colors_x = data_x->color;
                         }
@@ -214,7 +225,7 @@ namespace dairin0d.Rendering {
 
         public unsafe void Clear(Color32 background) {
             var clear_data = default(DataItem);
-            clear_data.radius2 = 0;
+            clear_data.address = -1;
             clear_data.depth = int.MaxValue;
             clear_data.color = background;
             clear_data.id = 0;
@@ -451,7 +462,7 @@ namespace dairin0d.Rendering {
             
             splatter.RenderObjects(buffer, cam, EnumerateInstances());
             
-            buffer.RenderEnd(DepthDisplayShift);
+            buffer.RenderEnd(splatter.UseAddress, DepthDisplayShift);
         }
         
         IEnumerable<ModelInstance> EnumerateInstances() {
@@ -459,16 +470,6 @@ namespace dairin0d.Rendering {
                 yield return instance;
             }
         }
-    }
-    
-    public struct NodeInfo {
-        public int Address; // where to load the subnode data from
-        public byte Mask;
-        public Color24 Color;
-    }
-    
-    public struct Color24 {
-        public byte R, G, B; // Alpha isn't used in splatting anyway
     }
     
     static class Subsampler {
@@ -504,61 +505,15 @@ namespace dairin0d.Rendering {
         struct NodeState {
             public int x0, y0, x1, y1;
             public int level, x, y, z;
-            public int readIndex;
-            public int parentOffset;
-            // public int loadAddress;
-            // public Color24 color;
-            public NodeInfo info;
+            public int address; // address of this node, not of the first child node
+            public OctreeNode info;
         }
         NodeState[] stack = new NodeState[8 * 32];
-        
-        // These are used for faster copying
-        struct IndexCache8 {
-            public int n0, n1, n2, n3, n4, n5, n6, n7;
-        }
-        struct InfoCache8 {
-            public NodeInfo n0, n1, n2, n3, n4, n5, n6, n7;
-        }
-        
-        struct NodeCacheItem {
-            public int Offset;
-            public NodeInfo Info;
-            private int pad0; // perhaps later used for something else
-        }
-        struct NodeCacheItem8 {
-            public NodeCacheItem n0, n1, n2, n3, n4, n5, n6, n7;
-        }
-        
-        const int CacheStorageCount = 2*1024*1024;
-        int currentCacheIndex = 0;
-        
-        class NodeCache {
-            public int[] indices;
-            public NodeInfo[] infos;
-            public Dictionary<(ModelInstance, Model3D, int, int), int> offsets;
-            
-            public NodeCache(int count) {
-                int size = count * 8;
-                indices = new int[size];
-                infos = new NodeInfo[size];
-                offsets = new Dictionary<(ModelInstance, Model3D, int, int), int>();
-            }
-        }
-        NodeCache[] caches = new NodeCache[] {
-            new NodeCache(CacheStorageCount),
-            new NodeCache(CacheStorageCount),
-            new NodeCache(CacheStorageCount),
-            new NodeCache(CacheStorageCount),
-        };
-        NodeCache cacheSwap = new NodeCache(CacheStorageCount);
         
         public int MapShift = 4;
         OctantMap octantMap = new OctantMap();
         
         public int MaxLevel = 0;
-        
-        public int CacheCount;
-        public int LoadedCount;
         
         public bool UpdateCache = true;
         
@@ -567,10 +522,13 @@ namespace dairin0d.Rendering {
         public float DistortionTolerance = 1;
         
         public bool DrawCubes = false;
+        public bool DrawCubes7 = false;
         
         public bool DrawCircles = false;
         
         public int RadiusShift = 3;
+        
+        public bool UseAddress = false;
         
         int GeneralNodeCount;
         int AffineNodeCount;
@@ -674,15 +632,16 @@ namespace dairin0d.Rendering {
         
         unsafe struct Context {
             public Buffer.DataItem* buffer;
-            public uint* queues;
+            public int* octantToIndex;
+            public int* indexToOctant;
+            public OctantOrder.Queue* sparseQueues;
+            public OctantOrder.Queue* packedQueues;
             public Delta* deltas;
             public NodeState* stack;
             public byte* xmap;
             public byte* ymap;
-            public int* readIndexCache;
-            public int* writeIndexCache;
-            public NodeInfo* readInfoCache;
-            public NodeInfo* writeInfoCache;
+            public GCHandle nodeDataHandle;
+            public OctreeNode* nodeData;
             public int* gridCornerIndices;
             public int* gridSubdivisionIndices;
             public int* subgridCornerIndices;
@@ -691,21 +650,23 @@ namespace dairin0d.Rendering {
             public ProjectedVertex* projectedGridsStack;
             public ModelInstance instance;
             public Model3D model;
-            public NodeCache sourceCache;
-            public NodeCache targetCache;
+            public ChunkedOctree octree;
+            public OctantOrder.Queue* queues;
+            public ChunkedOctree.ChunkInfo* chunkInfos;
+            public bool isPacked;
+            public int chunkShift, chunkMask;
             public int width, height, bufferShift;
             public float xCenter, yCenter, pixelScale;
             public float xMin, yMin, xMax, yMax; // in clip space
             public float zNear, zFar, depthScale;
             public bool isOrthographic;
             public int currentFrame;
-            public int writeIndex;
             public int partIndex, geometryIndex;
         }
         
         public void UpdateWidgets(List<Widget<string>> infoWidgets, List<Widget<float>> sliderWidgets, List<Widget<bool>> toggleWidgets) {
-            infoWidgets.Add(new Widget<string>($"Cached={CacheCount}"));
-            infoWidgets.Add(new Widget<string>($"Loaded={LoadedCount}"));
+            // infoWidgets.Add(new Widget<string>($"Cached={CacheCount}"));
+            // infoWidgets.Add(new Widget<string>($"Loaded={LoadedCount}"));
             infoWidgets.Add(new Widget<string>($"General={GeneralNodeCount}"));
             infoWidgets.Add(new Widget<string>($"Affine={AffineNodeCount}"));
 
@@ -717,7 +678,9 @@ namespace dairin0d.Rendering {
 
             toggleWidgets.Add(new Widget<bool>("Draw Circles", () => DrawCircles, (value) => { DrawCircles = value; }));
             toggleWidgets.Add(new Widget<bool>("Draw Cubes", () => DrawCubes, (value) => { DrawCubes = value; }));
+            toggleWidgets.Add(new Widget<bool>("Draw Cubes 7", () => DrawCubes7, (value) => { DrawCubes7 = value; }));
             toggleWidgets.Add(new Widget<bool>("Update Cache", () => UpdateCache, (value) => { UpdateCache = value; }));
+            toggleWidgets.Add(new Widget<bool>("Use Address", () => UseAddress, (value) => { UseAddress = value; }));
         }
         
         public unsafe void RenderObjects(Buffer buffer, Camera camera, IEnumerable<ModelInstance> instances) {
@@ -761,49 +724,34 @@ namespace dairin0d.Rendering {
             
             ////////////////////////////////////////////////////////////
             
-            if (buffer.Subsample) {
-                currentCacheIndex = context.currentFrame & 0b11;
-            }
-            context.sourceCache = caches[currentCacheIndex];
-            context.targetCache = cacheSwap;
-            
-            CacheCount = 0;
-            LoadedCount = 0;
             GeneralNodeCount = 0;
             AffineNodeCount = 0;
-            context.targetCache.offsets.Clear();
             
             octantMap.Resize(MapShift);
             
-            // The zeroth element is used for "writing cached parent reference" of root nodes
-            // (the value is not used, this just avoids extra checks)
-            context.writeIndex = 2;
-            
             fixed (Buffer.DataItem* buf = buffer.Data)
-            fixed (uint* queues = OctantOrder.Queues)
+            fixed (int* octantToIndex = OctantOrder.OctantToIndex)
+            fixed (int* indexToOctant = OctantOrder.IndexToOctant)
+            fixed (OctantOrder.Queue* sparseQueues = OctantOrder.SparseQueues)
+            fixed (OctantOrder.Queue* packedQueues = OctantOrder.PackedQueues)
             fixed (Delta* deltas = this.deltas)
             fixed (NodeState* stack = this.stack)
             fixed (byte* xmap = octantMap.DataX)
             fixed (byte* ymap = octantMap.DataY)
-            fixed (int* readIndexCache = context.sourceCache.indices)
-            fixed (int* writeIndexCache = context.targetCache.indices)
-            fixed (NodeInfo* readInfoCache = context.sourceCache.infos)
-            fixed (NodeInfo* writeInfoCache = context.targetCache.infos)
             fixed (int* gridCornerIndices = GridCornerIndices)
             fixed (int* gridSubdivisionIndices = GridSubdivisionIndices)
             fixed (int* subgridCornerIndices = SubgridCornerIndices)
             fixed (ProjectedVertex* projectedVertices = this.projectedVertices)
             {
                 context.buffer = buf;
-                context.queues = queues;
+                context.octantToIndex = octantToIndex;
+                context.indexToOctant = indexToOctant;
+                context.sparseQueues = sparseQueues;
+                context.packedQueues = packedQueues;
                 context.deltas = deltas;
                 context.stack = stack;
                 context.xmap = xmap;
                 context.ymap = ymap;
-                context.readIndexCache = readIndexCache;
-                context.writeIndexCache = writeIndexCache;
-                context.readInfoCache = readInfoCache;
-                context.writeInfoCache = writeInfoCache;
                 context.gridCornerIndices = gridCornerIndices;
                 context.gridSubdivisionIndices = gridSubdivisionIndices;
                 context.subgridCornerIndices = subgridCornerIndices;
@@ -811,24 +759,28 @@ namespace dairin0d.Rendering {
                 context.projectedPartCorners = projectedVertices;
                 context.projectedGridsStack = projectedVertices;
                 
-                foreach (var instance in instances) {
-                    context.instance = instance;
-                    context.model = instance.Model;
-                    
-                    var modelViewMatrix = viewMatrix * instance.CachedTransform.localToWorldMatrix;
-                    
-                    // TODO: occlusion test with the whole model's bounds?
-                    // (probably makes sense only if the model has more than a few parts)
-                    
-                    ProjectCageVertices(ref context, ref modelViewMatrix);
-                    SetupParts(ref context);
-                    RenderParts(ref context);
+                context.nodeDataHandle = GCHandle.Alloc(ChunkedOctree.DataArray, GCHandleType.Pinned);
+                context.nodeData = (OctreeNode*) context.nodeDataHandle.AddrOfPinnedObject();
+                
+                try {
+                    foreach (var instance in instances) {
+                        context.instance = instance;
+                        context.model = instance.Model;
+                        
+                        var modelViewMatrix = viewMatrix * instance.CachedTransform.localToWorldMatrix;
+                        
+                        // TODO: occlusion test with the whole model's bounds?
+                        // (probably makes sense only if the model has more than a few parts)
+                        
+                        ProjectCageVertices(ref context, ref modelViewMatrix);
+                        SetupParts(ref context);
+                        RenderParts(ref context);
+                    }
+                } finally {
+                    context.nodeDataHandle.Free();
+                    context.nodeDataHandle = default;
                 }
             }
-            
-            CacheCount = context.writeIndex;
-            
-            (caches[currentCacheIndex], cacheSwap) = (cacheSwap, caches[currentCacheIndex]);
         }
         
         unsafe void ProjectCageVertices(ref Context context, ref Matrix4x4 modelViewMatrix) {
@@ -888,7 +840,6 @@ namespace dairin0d.Rendering {
             var frames = context.instance.Frames;
             
             Matrix4x4 matrix = default;
-            IndexCache8 emptyIndices = new IndexCache8 {n0=-1, n1=-1, n2=-1, n3=-1, n4=-1, n5=-1, n6=-1, n7=-1};
             
             foreach (var (minZ, partIndex) in sortedPartIndices) {
                 int frame = ((frames != null) && (partIndex < frames.Length)) ? frames[partIndex] : 0;
@@ -903,39 +854,23 @@ namespace dairin0d.Rendering {
                 }
                 
                 var geometry = context.model.Geometries[context.geometryIndex];
-                var octree = geometry as RawOctree;
-                // int maxLevel = octree.MaxLevel;
-                int maxLevel = Mathf.Min(octree.MaxLevel, MaxLevel);
-                int node = octree.RootNode;
-                var color = octree.RootColor;
-                int mask = node & 0xFF;
-                fixed (int* nodes = octree.Nodes)
-                fixed (Color32* colors = octree.Colors)
-                {
-                    var cacheOffsetKey = (context.instance, context.model, context.partIndex, context.geometryIndex);
-                    
-                    int writeIndexStart = context.writeIndex;
-                    
-                    if (!context.sourceCache.offsets.TryGetValue(cacheOffsetKey, out var readIndex)) {
-                        readIndex = -1;
-                    }
-                    
-                    // readIndex = (readIndex << 8) | mask;
-                    
-                    RenderGeometry(ref context, projectedGrid, ref matrix,
-                        readIndex, mask, LoadNode, maxLevel, node, color, nodes, colors, ref emptyIndices);
-                    
-                    if (context.writeIndex > writeIndexStart) {
-                        context.targetCache.offsets[cacheOffsetKey] = writeIndexStart;
-                    }
+                var octree = geometry as ChunkedOctree;
+                context.octree = octree;
+                context.isPacked = octree.IsPacked;
+                fixed (ChunkedOctree.ChunkInfo* chunkInfos = octree.ChunkInfos) {
+                    context.chunkInfos = chunkInfos;
+                    context.chunkShift = octree.ChunkShift;
+                    context.chunkMask = (1 << context.chunkShift) - 1;
+                    context.queues = octree.IsPacked ? context.packedQueues : context.sparseQueues;
+                    var root = octree.Root;
+                    RenderGeometry(ref context, projectedGrid, ref matrix, MaxLevel,
+                        root.Address, root.Mask, -1, (Color32) root.BaseColor);
                 }
             }
         }
         
-        unsafe void RenderGeometry(ref Context context, ProjectedVertex* projectedGrid,
-            ref Matrix4x4 matrix, int readIndex, int nodeMask, LoadFuncDelegate loadFunc,
-            int maxLevel, int loadAddress, Color32 parentColor, int* nodes, Color32* colors,
-            ref IndexCache8 emptyIndices, int minY = 0, int parentOffset = 0)
+        unsafe void RenderGeometry(ref Context context, ProjectedVertex* projectedGrid, ref Matrix4x4 matrix,
+            int maxLevel, int loadAddress, int nodeMask, int parentAddress, Color32 parentColor, int minY = 0)
         {
             GeneralNodeCount++;
             
@@ -954,12 +889,20 @@ namespace dairin0d.Rendering {
             if (iyMin < minY) iyMin = minY;
             if ((ixMax < ixMin) | (iyMax < iyMin)) return;
             
+            if (loadAddress >= 0) {
+                int chunkIndex = loadAddress >> context.chunkShift;
+                var chunkInfo = context.chunkInfos + chunkIndex;
+                if (!UpdateCache & (chunkInfo->ChunkStart < 0)) nodeMask = 0;
+            }
+            
+            if (maxLevel <= 0) nodeMask = 0;
+            
             if (boundsMin.z > context.zNear) {
                 int iz = (int)((boundsMin.z - context.zNear) * context.depthScale);
                 
                 bool isSinglePixel = (ixMin == ixMax) & (iyMin == iyMax);
                 
-                if ((!DrawCubes & (maxLevel == 0)) | isSinglePixel) {
+                if ((!DrawCubes & (nodeMask == 0)) | isSinglePixel) {
                     if (DrawCircles & !isSinglePixel) {
                         float cx = (boundsMin.x + boundsMax.x) * 0.5f;
                         float cy = (boundsMin.y + boundsMax.y) * 0.5f;
@@ -987,6 +930,7 @@ namespace dairin0d.Rendering {
                                 var pixel = bufY + x;
                                 pixel->id += 1;
                                 if ((iz < (pixel->depth & int.MaxValue)) & (r2 <= r2max)) {
+                                    pixel->address = parentAddress;
                                     pixel->color = parentColor;
                                     pixel->depth = iz;
                                 }
@@ -1004,6 +948,7 @@ namespace dairin0d.Rendering {
                                 var pixel = bufY + x;
                                 pixel->id += 1;
                                 if (iz < (pixel->depth & int.MaxValue)) {
+                                    pixel->address = parentAddress;
                                     pixel->color = parentColor;
                                     pixel->depth = iz;
                                 }
@@ -1036,8 +981,7 @@ namespace dairin0d.Rendering {
                     var sizeY = boundsMax.y - boundsMin.y;
                     var size = (sizeX > sizeY ? sizeX : sizeY);
                     if ((size < MaxAffineSize) && IsApproximatelyAffine(projectedGrid, ref matrix)) {
-                        RenderAffine(ref context, ref matrix, maxLevel, loadAddress, parentColor, nodes, colors,
-                            readIndex, nodeMask, LoadNode, ref emptyIndices, parentOffset);
+                        RenderAffine(ref context, ref matrix, maxLevel, loadAddress, nodeMask, parentAddress, parentColor);
                         return;
                     }
                 }
@@ -1045,10 +989,11 @@ namespace dairin0d.Rendering {
                 // If this node intersects the near plane, we can only subdivide further or skip
                 
                 // Skip, if reached the leaf level or node occupies 1 pixel on screen
-                if ((maxLevel == 0) | ((ixMin == ixMax) & (iyMin == iyMax))) return;
+                if ((nodeMask == 0) | ((ixMin == ixMax) & (iyMin == iyMax))) return;
             }
             
-            // int nodeMask = readIndex & 0xFF;
+            bool isCube = DrawCubes & ((nodeMask == 0) | (loadAddress < 0));
+            if (isCube) nodeMask = 0xFF;
             
             Subdivide(ref context, projectedGrid);
             
@@ -1066,84 +1011,55 @@ namespace dairin0d.Rendering {
             ///////////////////////////////////////////
             
             // Calculate base parent offset for this node's children
-            int subParentOffset = context.writeIndex << 3;
-            var info8 = context.writeInfoCache + subParentOffset;
-            var index8 = context.writeIndexCache + subParentOffset;
-            var index8read = index8;
+            OctreeNode* subnodes = null;
             
-            if (readIndex != int.MinValue) {
-                // Write reference to this cached node in the parent
-                context.writeIndexCache[parentOffset] = context.writeIndex;
+            int absAddress = int.MinValue;
+            
+            if (loadAddress >= 0) {
+                int chunkIndex = loadAddress >> context.chunkShift;
+                var chunkInfo = context.chunkInfos + chunkIndex;
+                chunkInfo->AccessTime = context.currentFrame;
                 
-                // Clear the cached node references
-                *((IndexCache8*)index8) = emptyIndices;
-                
-                if (readIndex < 0) {
-                    loadFunc(loadAddress, info8, nodes, colors);
-                    LoadedCount++;
-                } else {
-                    // int _readIndex = readIndex >> 8;
-                    // index8read = context.readIndexCache + (_readIndex << 3);
-                    // *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[_readIndex];
-                    index8read = context.readIndexCache + (readIndex << 3);
-                    *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[readIndex];
+                if (chunkInfo->ChunkStart < 0) {
+                    context.octree.Unpack(chunkIndex, ref context.nodeDataHandle, ref context.nodeData);
                 }
                 
-                context.writeIndex += 1;
+                subnodes = context.nodeData + chunkInfo->ChunkStart + (loadAddress & context.chunkMask);
+                
+                absAddress = (int)(subnodes - context.nodeData);
             }
             
             ///////////////////////////////////////////
             
-            bool isCube = DrawCubes & (maxLevel < 1);
-            bool isAlmostCube = DrawCubes & (maxLevel == 1);
-            
             // Process subnodes
-            for (; queue != 0; queue >>= 4) {
-                int octant = unchecked((int)(queue & 7));
-                
+            for (; queue.Indices != 0; queue.Indices >>= 4, queue.Octants >>= 4) {
                 var octantGrid = projectedGrid + GridVertexCount;
-                var octantCorners = context.subgridCornerIndices + (octant << 3);
+                var octantCorners = context.subgridCornerIndices + ((queue.Octants & 7) << 3);
                 for (int corner = 0; corner < GridCornersCount; corner++) {
                     octantGrid[context.gridCornerIndices[corner]] = projectedGrid[octantCorners[corner]];
                 }
                 
+                int octantMask;
+                int octantLoadAddress;
+                int octantAddress;
+                Color32 octantColor;
+                
                 if (isCube) {
-                    int octantParentOffset = -1;
-                    int octantMask = 0xFF;
-                    int octantReadIndex = int.MinValue;
-                    int octantLoadAddress = -1;
-                    var octantColor = parentColor;
-                    
-                    RenderGeometry(ref context, octantGrid,
-                        ref matrix, octantReadIndex, octantMask, loadFunc,
-                        maxLevel-1, octantLoadAddress, octantColor, nodes, colors,
-                        ref emptyIndices, minY, octantParentOffset);
-                } else if (isAlmostCube) {
-                    int octantParentOffset = -1;
-                    int octantMask = 0xFF;
-                    int octantReadIndex = int.MinValue;
-                    int octantLoadAddress = -1;
-                    var octantColor24 = info8[octant].Color;
-                    var octantColor = new Color32 {r = octantColor24.R, g = octantColor24.G, b = octantColor24.B, a = 255};
-                    
-                    RenderGeometry(ref context, octantGrid,
-                        ref matrix, octantReadIndex, octantMask, loadFunc,
-                        maxLevel-1, octantLoadAddress, octantColor, nodes, colors,
-                        ref emptyIndices, minY, octantParentOffset);
+                    octantAddress = parentAddress;
+                    octantMask = 0xFF;
+                    octantLoadAddress = -1;
+                    octantColor = parentColor;
                 } else {
-                    int octantParentOffset = subParentOffset | octant;
-                    int octantMask = info8[octant].Mask;
-                    int octantReadIndex = index8read[octant];
-                    // int octantReadIndex = (index8read[octant] << 8) | info8[octant].Mask;
-                    int octantLoadAddress = info8[octant].Address;
-                    var octantColor24 = info8[octant].Color;
-                    var octantColor = new Color32 {r = octantColor24.R, g = octantColor24.G, b = octantColor24.B, a = 255};
-                    
-                    RenderGeometry(ref context, octantGrid,
-                        ref matrix, octantReadIndex, octantMask, loadFunc,
-                        maxLevel-1, octantLoadAddress, octantColor, nodes, colors,
-                        ref emptyIndices, minY, octantParentOffset);
+                    octantAddress = absAddress + unchecked((int)(queue.Indices & 7));
+                    var subnode = subnodes + (queue.Indices & 7);
+                    octantMask = subnode->Mask;
+                    octantLoadAddress = subnode->Address;
+                    var octantColor24 = subnode->BaseColor;
+                    octantColor = new Color32 {r = octantColor24.R, g = octantColor24.G, b = octantColor24.B, a = 255};
                 }
+                
+                RenderGeometry(ref context, octantGrid, ref matrix,
+                    maxLevel-1, octantLoadAddress, octantMask, octantAddress, octantColor, minY);
             }
         }
         
@@ -1248,9 +1164,8 @@ namespace dairin0d.Rendering {
             }
         }
         
-        unsafe void RenderAffine(ref Context context, ref Matrix4x4 matrix, int maxLevel,
-            int loadAddress, Color32 parentColor, int* nodes, Color32* colors,
-            int readIndex, int parentMask, LoadFuncDelegate loadFunc, ref IndexCache8 emptyIndices, int parentOffset = 0)
+        unsafe void RenderAffine(ref Context context, ref Matrix4x4 matrix,
+            int maxLevel, int loadAddress, int parentMask, int parentAddress, Color32 parentColor)
         {
             SetupAffine(ref context, in matrix, out int potShift,
                 out int centerX, out int centerY, out int extentX, out int extentY, out int startZ, out float radius);
@@ -1269,8 +1184,8 @@ namespace dairin0d.Rendering {
             
             int forwardKey = OctantOrder.Key(in matrix);
             int reverseKey = forwardKey ^ 0b11100000000;
-            uint* forwardQueues = context.queues + forwardKey;
-            uint* reverseQueues = context.queues + reverseKey;
+            var forwardQueues = context.queues + forwardKey;
+            var reverseQueues = context.queues + reverseKey;
             
             int bufMask = (1 << context.bufferShift) - 1;
             int bufMaskInv = ~bufMask;
@@ -1299,14 +1214,12 @@ namespace dairin0d.Rendering {
             if (curr->x1 >= context.width) curr->x1 = context.width-1;
             if (curr->y1 >= context.height) curr->y1 = context.height-1;
             
-            curr->parentOffset = parentOffset;
-            curr->readIndex = readIndex;
-            // curr->loadAddress = loadAddress;
-            // curr->color = new Color24 {R=parentColor.r, G=parentColor.g, B=parentColor.b};
-            curr->info = new NodeInfo {
+            curr->address = parentAddress;
+            
+            curr->info = new OctreeNode {
                 Address = loadAddress,
                 Mask = (byte)parentMask,
-                Color = new Color24 {R=parentColor.r, G=parentColor.g, B=parentColor.b},
+                BaseColor = new Color24 {R=parentColor.r, G=parentColor.g, B=parentColor.b},
             };
             
             {
@@ -1327,6 +1240,40 @@ namespace dairin0d.Rendering {
                 var state = *curr;
                 --curr;
                 
+                if (state.info.Address >= 0) {
+                    int chunkIndex = state.info.Address >> context.chunkShift;
+                    var chunkInfo = context.chunkInfos + chunkIndex;
+                    if (!UpdateCache & (chunkInfo->ChunkStart < 0)) state.info.Mask = 0;
+                }
+                
+                if (state.level >= maxLevel) state.info.Mask = 0;
+                
+                bool isCube = DrawCubes & ((state.info.Mask == 0) | (state.info.Address < 0));
+                if (isCube) state.info.Mask = 0xFF;
+                
+                if (state.info.Mask == 0) {
+                    for (int y = state.y0; y <= state.y1; y++) {
+                        var bufY = context.buffer + (y << context.bufferShift);
+                        for (int x = state.x0; x <= state.x1; x++) {
+                            var pixel = bufY + x;
+                            pixel->id += 1;
+                            
+                            if (state.z < pixel->depth) {
+                                pixel->address = state.address;
+                                var color24 = state.info.BaseColor;
+                                pixel->color = new Color32 {
+                                    r = color24.R,
+                                    g = color24.G,
+                                    b = color24.B,
+                                    a = 255
+                                };
+                                pixel->depth = state.z | int.MinValue;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                
                 int lastY = state.y0;
                 
                 // Occlusion test
@@ -1345,56 +1292,46 @@ namespace dairin0d.Rendering {
                 traverse:;
                 
                 // Calculate base parent offset for this node's children
-                int subParentOffset = context.writeIndex << 3;
-                var info8 = context.writeInfoCache + subParentOffset;
-                var index8 = context.writeIndexCache + subParentOffset;
-                var index8read = index8;
+                OctreeNode* subnodes = null;
                 
-                if (state.readIndex != int.MinValue) {
-                    // Write reference to this cached node in the parent
-                    context.writeIndexCache[state.parentOffset] = context.writeIndex;
+                int absAddress = int.MinValue;
+                
+                if (state.info.Address >= 0) {
+                    int chunkIndex = state.info.Address >> context.chunkShift;
+                    var chunkInfo = context.chunkInfos + chunkIndex;
+                    chunkInfo->AccessTime = context.currentFrame;
                     
-                    // Clear the cached node references
-                    *((IndexCache8*)index8) = emptyIndices;
-                    
-                    if (state.readIndex < 0) {
-                        // loadFunc(state.loadAddress, info8, nodes, colors);
-                        loadFunc(state.info.Address, info8, nodes, colors);
-                        LoadedCount++;
-                    } else {
-                        // int _readIndex = state.readIndex >> 8;
-                        // index8read = context.readIndexCache + (_readIndex << 3);
-                        // *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[_readIndex];
-                        index8read = context.readIndexCache + (state.readIndex << 3);
-                        *((InfoCache8*)info8) = ((InfoCache8*)context.readInfoCache)[state.readIndex];
+                    if (chunkInfo->ChunkStart < 0) {
+                        context.octree.Unpack(chunkIndex, ref context.nodeDataHandle, ref context.nodeData);
                     }
                     
-                    context.writeIndex += 1;
+                    subnodes = context.nodeData + chunkInfo->ChunkStart + (state.info.Address & context.chunkMask);
+                    
+                    absAddress = (int)(subnodes - context.nodeData);
                 }
                 
                 ///////////////////////////////////////////
                 
                 bool sizeCondition = (state.x1-state.x0 < splatAt) & (state.y1-state.y0 < splatAt);
-                bool shouldDraw = (!DrawCubes & (state.level >= maxLevel)) | sizeCondition;
-                shouldDraw |= !updateCache & (state.readIndex < 0);
+                bool shouldDraw = (!DrawCubes & (state.info.Mask == 0)) | sizeCondition;
                 
-                bool isCube = DrawCubes & (state.level > maxLevel);
-                bool isAlmostCube = DrawCubes & (state.level == maxLevel);
-                
-                // int nodeMask = state.readIndex & 0xFF;
                 int nodeMask = state.info.Mask;
                 
                 if (!shouldDraw) {
                     var queue = reverseQueues[nodeMask];
                     
+                    if (isCube & DrawCubes7) {
+                        queue.Indices >>= 4; queue.Octants >>= 4; // reverse queue
+                    }
+                    
                     int subExtentX = (extentX >> state.level) - SubpixelHalf;
                     int subExtentY = (extentY >> state.level) - SubpixelHalf;
                     
-                    for (; queue != 0; queue >>= 4) {
-                        int octant = unchecked((int)(queue & 7));
+                    for (; queue.Indices != 0; queue.Indices >>= 4, queue.Octants >>= 4) {
+                        var delta = context.deltas + (queue.Octants & 7);
                         
-                        int x = state.x + (deltas[octant].x >> state.level);
-                        int y = state.y + (deltas[octant].y >> state.level);
+                        int x = state.x + (delta->x >> state.level);
+                        int y = state.y + (delta->y >> state.level);
                         
                         int x0 = (x - subExtentX) >> SubpixelShift;
                         int y0 = (y - subExtentY) >> SubpixelShift;
@@ -1411,27 +1348,20 @@ namespace dairin0d.Rendering {
                         curr->level = state.level+1;
                         curr->x = x;
                         curr->y = y;
-                        curr->z = state.z + (deltas[octant].z >> state.level);
+                        curr->z = state.z + (delta->z >> state.level);
                         curr->x0 = x0;
                         curr->y0 = y0;
                         curr->x1 = x1;
                         curr->y1 = y1;
                         
                         if (isCube) {
-                            curr->readIndex = int.MinValue;
-                            curr->info.Color = state.info.Color;
+                            curr->address = state.address;
+                            curr->info.Address = -1;
                             curr->info.Mask = 0xFF;
-                        } else if (isAlmostCube) {
-                            curr->readIndex = int.MinValue;
-                            curr->info = info8[octant];
-                            curr->info.Mask = 0xFF;
+                            curr->info.BaseColor = state.info.BaseColor;
                         } else {
-                            curr->parentOffset = subParentOffset | octant;
-                            // curr->readIndex = (index8read[octant] << 8) | info8[octant].Mask;
-                            // curr->loadAddress = info8[octant].Address;
-                            // curr->color = info8[octant].Color;
-                            curr->readIndex = index8read[octant];
-                            curr->info = info8[octant];
+                            curr->address = absAddress + unchecked((int)(queue.Indices & 7));
+                            curr->info = subnodes[queue.Indices & 7];
                         }
                     }
                 } else if (DrawCircles & !sizeCondition) {
@@ -1440,11 +1370,11 @@ namespace dairin0d.Rendering {
                     int subExtentX = (extentX >> state.level) - SubpixelHalf;
                     int subExtentY = (extentY >> state.level) - SubpixelHalf;
                     
-                    for (; queue != 0; queue >>= 4) {
-                        int octant = unchecked((int)(queue & 7));
+                    for (; queue.Indices != 0; queue.Indices >>= 4, queue.Octants >>= 4) {
+                        var delta = context.deltas + (queue.Octants & 7);
                         
-                        int cx = (state.x + (deltas[octant].x >> state.level));
-                        int cy = (state.y + (deltas[octant].y >> state.level));
+                        int cx = (state.x + (delta->x >> state.level));
+                        int cy = (state.y + (delta->y >> state.level));
                         
                         int x0 = (cx - r) >> SubpixelShift; if (x0 < 0) x0 = 0;
                         int y0 = (cy - r) >> SubpixelShift; if (y0 < 0) y0 = 0;
@@ -1456,7 +1386,7 @@ namespace dairin0d.Rendering {
                         int icx = cx >> SubpixelShift;
                         int icy = cy >> SubpixelShift;
                         
-                        int z = state.z + (deltas[octant].z >> state.level);
+                        int z = state.z + (delta->z >> state.level);
                         
                         int idx = ((x0 - icx) << rShift) + ((SubpixelHalf - (cx & SubpixelMask)) >> drShift);
                         int idy = ((y0 - icy) << rShift) + ((SubpixelHalf - (cy & SubpixelMask)) >> drShift);
@@ -1467,16 +1397,21 @@ namespace dairin0d.Rendering {
                             for (int x = x0; x <= x1; x++) {
                                 var pixel = bufY + x;
                                 pixel->id += 1;
-                                if ((z < (pixel->depth & int.MaxValue)) & (r2 <= r2max)) {
-                                    var color24 = info8[octant].Color;
-                                    pixel->color = new Color32 {
-                                        r = color24.R,
-                                        g = color24.G,
-                                        b = color24.B,
-                                        a = 255
-                                    };
+                                
+                                if ((z < pixel->depth) & (r2 <= r2max)) {
+                                    pixel->address = absAddress + unchecked((int)(queue.Indices & 7));
+                                    if (!UseAddress) {
+                                        var color24 = subnodes[queue.Indices & 7].BaseColor;
+                                        pixel->color = new Color32 {
+                                            r = color24.R,
+                                            g = color24.G,
+                                            b = color24.B,
+                                            a = 255
+                                        };
+                                    }
                                     pixel->depth = z | int.MinValue;
                                 }
+                                
                                 r2 += (_idx << r2Shift) + r2Add;
                                 _idx += rStep;
                             }
@@ -1485,6 +1420,8 @@ namespace dairin0d.Rendering {
                         }
                     }
                 } else {
+                    int nodeMaskKey = nodeMask << 3;
+                    
                     int mapHalf = 1 << (SubpixelShift + potShift - state.level);
                     int toMapShift = (SubpixelShift + potShift - state.level + 1) - octantMap.SizeShift;
                     int sx0 = (state.x0 << SubpixelShift) + SubpixelHalf - (state.x - mapHalf);
@@ -1496,34 +1433,42 @@ namespace dairin0d.Rendering {
                         for (int x = state.x0, mx = sx0; x <= state.x1; x++, mx += SubpixelSize) {
                             var pixel = bufY + x;
                             int mask = context.xmap[mx >> toMapShift] & maskY;
+                            
                             if ((mask != 0) & (state.z < pixel->depth)) {
-                                int octant = unchecked((int)(forwardQueues[mask] & 7));
-                                int z = state.z + (deltas[octant].z >> state.level);
+                                var octant = unchecked((int)(forwardQueues[mask].Octants & 7));
+                                
+                                int z = state.z + (context.deltas[octant].z >> state.level);
                                 pixel->id += 1;
+                                
                                 if (z < pixel->depth) {
                                     if (isCube) {
+                                        pixel->address = state.address;
                                         pixel->color = new Color32 {
-                                            r = state.info.Color.R,
-                                            g = state.info.Color.G,
-                                            b = state.info.Color.B,
+                                            r = state.info.BaseColor.R,
+                                            g = state.info.BaseColor.G,
+                                            b = state.info.BaseColor.B,
                                             a = 255
                                         };
                                     } else {
-                                        var color24 = info8[octant].Color;
-                                        if (state.level >= maxLevel) {
-                                            pixel->color = new Color32 {
-                                                r = (byte)((color24.R * blendFactorInv + state.info.Color.R * blendFactor + 255) >> 8),
-                                                g = (byte)((color24.G * blendFactorInv + state.info.Color.G * blendFactor + 255) >> 8),
-                                                b = (byte)((color24.B * blendFactorInv + state.info.Color.B * blendFactor + 255) >> 8),
-                                                a = 255
-                                            };
-                                        } else {
-                                            pixel->color = new Color32 {
-                                                r = color24.R,
-                                                g = color24.G,
-                                                b = color24.B,
-                                                a = 255
-                                            };
+                                        int index = context.isPacked ? context.octantToIndex[nodeMaskKey | octant] : octant;
+                                        pixel->address = absAddress + index;
+                                        if (!UseAddress) {
+                                            var color24 = subnodes[index].BaseColor;
+                                            if (state.level >= maxLevel) {
+                                                pixel->color = new Color32 {
+                                                    r = (byte)((color24.R * blendFactorInv + state.info.BaseColor.R * blendFactor + 255) >> 8),
+                                                    g = (byte)((color24.G * blendFactorInv + state.info.BaseColor.G * blendFactor + 255) >> 8),
+                                                    b = (byte)((color24.B * blendFactorInv + state.info.BaseColor.B * blendFactor + 255) >> 8),
+                                                    a = 255
+                                                };
+                                            } else {
+                                                pixel->color = new Color32 {
+                                                    r = color24.R,
+                                                    g = color24.G,
+                                                    b = color24.B,
+                                                    a = 255
+                                                };
+                                            }
                                         }
                                     }
                                     pixel->depth = z | int.MinValue;
@@ -1616,21 +1561,6 @@ namespace dairin0d.Rendering {
                         ++octant;
                     }
                 }
-            }
-        }
-        
-        unsafe delegate void LoadFuncDelegate(int loadAddress, NodeInfo* info8, int* nodes, Color32* colors);
-        
-        static unsafe void LoadNode(int loadAddress, NodeInfo* info8, int* nodes, Color32* colors) {
-            int offset = (loadAddress >> (8-3)) & (0xFFFFFF << 3);
-            for (int octant = 0; octant < 8; octant++) {
-                int octantOffset = offset|octant;
-                var info = info8 + octant;
-                info->Address = nodes[octantOffset];
-                info->Mask = (byte)(info->Address & 0xFF);
-                info->Color.R = colors[octantOffset].r;
-                info->Color.G = colors[octantOffset].g;
-                info->Color.B = colors[octantOffset].b;
             }
         }
         

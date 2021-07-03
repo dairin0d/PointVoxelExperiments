@@ -28,12 +28,29 @@ namespace dairin0d.Rendering {
         // bit-string "queue" of octant indices (can also take into account
         // different number of stored octants). When a node is "dequeued",
         // the bit-string shifts by 4 bits. 3 bits for octant index,
-        // 1 bit for signifying that this is the last octant.
+        // 1 bit for signifying a non-empty queue item.
+        
+        public struct Queue {
+            public uint Octants;
+            public uint Indices;
+        }
         
         public const int XYZ=0, XZY=1, YXZ=2, YZX=3, ZXY=4, ZYX=5;
         
-        private static uint[] queues = null;
-        public static uint[] Queues => queues ?? MakeQueues();
+        private static int[] counts = null;
+        public static int[] Counts => counts ?? MakeCounts();
+        
+        private static int[] octantToIndex = null;
+        public static int[] OctantToIndex => octantToIndex ?? MakeMaps().ToIndex;
+        
+        private static int[] indexToOctant = null;
+        public static int[] IndexToOctant => indexToOctant ?? MakeMaps().ToOctant;
+        
+        private static Queue[] sparseQueues = null;
+        public static Queue[] SparseQueues => sparseQueues ?? MakeQueues().Sparse;
+        
+        private static Queue[] packedQueues = null;
+        public static Queue[] PackedQueues => packedQueues ?? MakeQueues().Packed;
         
         public static int Key(in Matrix4x4 matrix) {
             return ((Order(in matrix) << 3) | Octant(in matrix)) << 8;
@@ -62,21 +79,69 @@ namespace dairin0d.Rendering {
             }
         }
         
-        private static uint[] MakeQueues() {
-            if (queues == null) {
-                queues = new uint[6*8*256];
-                for (int order = 0; order < 6; order++) {
-                    for (int octant = 0; octant < 8; octant++) {
-                        for (int mask = 0; mask < 256; mask++) {
-                            queues[(((order << 3) | octant) << 8) | mask] = MakeQueue(octant, order, mask);
-                        }
+        private static int[] MakeCounts() {
+            counts = new int[256];
+            
+            for (int mask = 0; mask < counts.Length; mask++) {
+                int count = 0;
+                for (int bits = mask; bits != 0; bits >>= 1) {
+                    if ((bits & 1) != 0) count++;
+                }
+                counts[mask] = count;
+            }
+            
+            return counts;
+        }
+        
+        private static (int[] ToIndex, int[] ToOctant) MakeMaps() {
+            octantToIndex = new int[256*8];
+            indexToOctant = new int[256*8];
+            
+            for (int mask = 0; mask < 256; mask++) {
+                int maskKey = mask << 3;
+                int maxIndex = -1;
+                for (int octant = 0; octant < 8; octant++) {
+                    int index = GetOctantIndex(octant, mask);
+                    octantToIndex[maskKey|octant] = index;
+                    if (index > maxIndex) maxIndex = index;
+                    if (index < 0) continue;
+                    indexToOctant[maskKey|index] = octant;
+                }
+                for (int index = maxIndex+1; index < 8; index++) {
+                    indexToOctant[maskKey|index] = -1;
+                }
+            }
+            
+            return (octantToIndex, indexToOctant);
+        }
+        
+        private static int GetOctantIndex(int octant, int mask) {
+            int index = -1;
+            for (; (mask != 0) & (octant >= 0); mask >>= 1, octant--) {
+                if ((mask & 1) != 0) index++;
+            }
+            return index;
+        }
+        
+        private static (Queue[] Packed, Queue[] Sparse) MakeQueues() {
+            packedQueues = new Queue[6*8*256];
+            for (int order = 0; order < 6; order++) {
+                for (int octant = 0; octant < 8; octant++) {
+                    for (int mask = 0; mask < 256; mask++) {
+                        packedQueues[(((order << 3) | octant) << 8) | mask] = MakeQueue(octant, order, mask, true);
                     }
                 }
             }
-            return queues;
+            
+            sparseQueues = new Queue[packedQueues.Length];
+            for (int i = 0; i < sparseQueues.Length; i++) {
+                sparseQueues[i].Octants = sparseQueues[i].Indices = packedQueues[i].Octants;
+            }
+            
+            return (packedQueues, sparseQueues);
         }
         
-        private static uint MakeQueue(int start, int order, int mask) {
+        private static Queue MakeQueue(int start, int order, int mask, bool packed = false) {
             int _u = 0, _v = 0, _w = 0;
             switch (order) {
             case XYZ: _u = 0; _v = 1; _w = 2; break;
@@ -87,7 +152,9 @@ namespace dairin0d.Rendering {
             case ZYX: _u = 2; _v = 1; _w = 0; break;
             }
             
-            uint queue = 0;
+            var map = OctantToIndex;
+            
+            Queue queue = default;
             int shift = 0;
             for (int w = 0; w <= 1; w++) {
                 for (int v = 0; v <= 1; v++) {
@@ -95,7 +162,9 @@ namespace dairin0d.Rendering {
                         int flip = (u << _u) | (v << _v) | (w << _w);
                         int octant = (start ^ flip);
                         if ((mask & (1 << octant)) == 0) continue;
-                        queue |= (uint)((octant|8) << shift);
+                        int index = packed ? map[(mask << 3)|octant] : octant;
+                        queue.Octants |= (uint)((octant|8) << shift);
+                        queue.Indices |= (uint)((index|8) << shift);
                         shift += 4;
                     }
                 }
