@@ -522,6 +522,7 @@ namespace dairin0d.Rendering {
         public float DistortionTolerance = 1;
         
         public bool DrawCubes = false;
+        public bool DrawCubes7 = false;
         
         public bool DrawCircles = false;
         
@@ -677,6 +678,7 @@ namespace dairin0d.Rendering {
 
             toggleWidgets.Add(new Widget<bool>("Draw Circles", () => DrawCircles, (value) => { DrawCircles = value; }));
             toggleWidgets.Add(new Widget<bool>("Draw Cubes", () => DrawCubes, (value) => { DrawCubes = value; }));
+            toggleWidgets.Add(new Widget<bool>("Draw Cubes 7", () => DrawCubes7, (value) => { DrawCubes7 = value; }));
             toggleWidgets.Add(new Widget<bool>("Update Cache", () => UpdateCache, (value) => { UpdateCache = value; }));
             toggleWidgets.Add(new Widget<bool>("Use Address", () => UseAddress, (value) => { UseAddress = value; }));
         }
@@ -1317,6 +1319,10 @@ namespace dairin0d.Rendering {
                 
                 if (!shouldDraw) {
                     var queue = reverseQueues[nodeMask];
+                    
+                    if (isCube & DrawCubes7) {
+                        queue.Indices >>= 4; queue.Octants >>= 4; // reverse queue
+                    }
                     
                     int subExtentX = (extentX >> state.level) - SubpixelHalf;
                     int subExtentY = (extentY >> state.level) - SubpixelHalf;
