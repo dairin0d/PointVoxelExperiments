@@ -109,6 +109,16 @@ namespace dairin0d.Rendering {
         public int[] Nodes;
         public Color32[] Colors;
 
+        // This is a hack to access the same folder both in editor and in build
+        private static string PathPrefix;
+        
+        private static void InitializePathPrefix() {
+            if (PathPrefix != null) return;
+            var configPath = Application.isEditor ? "ModelsPathInEditor" : "ModelsPathInBuild";
+            var textAsset = Resources.Load<TextAsset>(configPath);
+            PathPrefix = textAsset ? textAsset.text : "";
+        }
+
         public static RawOctree MakeFractal(byte mask, Color32 color) {
             int root_node = mask;
             var nodes = new int[8];
@@ -127,6 +137,12 @@ namespace dairin0d.Rendering {
         }
 
         public static RawOctree LoadPointCloud(string path, float voxel_size = -1) {
+            InitializePathPrefix();
+            
+            if (!Path.IsPathRooted(path) && !string.IsNullOrEmpty(PathPrefix)) {
+                path = Path.Combine(PathPrefix, path);
+            }
+            
             if (string.IsNullOrEmpty(path)) return null;
 
             string cached_path = path + ".cache4";

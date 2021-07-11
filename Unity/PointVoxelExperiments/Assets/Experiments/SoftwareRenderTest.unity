@@ -172,7 +172,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/OliveTree.csv
+  Path: OliveTree.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -483,7 +483,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/EasternLight.csv
+  Path: EasternLight.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -634,7 +634,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/EasternFurnace.csv
+  Path: EasternFurnace.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -785,7 +785,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/EasternLight.csv
+  Path: EasternLight.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -983,7 +983,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/MountainTerrain.csv
+  Path: MountainTerrain.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -1165,7 +1165,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/StoneBridge.csv
+  Path: StoneBridge.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -1315,7 +1315,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/MonkeyBI 90x65x55.csv
+  Path: MonkeyBI 90x65x55.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -1452,7 +1452,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/Manhattan (2048).csv
+  Path: Manhattan (2048).csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -1603,7 +1603,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/EasternFurniture.csv
+  Path: EasternFurniture.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -1754,7 +1754,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/WW2_1024.csv
+  Path: WW2_1024.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -1905,7 +1905,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/MedievalWindmill.csv
+  Path: MedievalWindmill.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -2132,7 +2132,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/PortTown 1253x1025x1256.csv
+  Path: PortTown 1253x1025x1256.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -2206,7 +2206,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/Cabriolet.csv
+  Path: Cabriolet.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -2389,7 +2389,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/BellverCastle (1024).csv
+  Path: BellverCastle (1024).csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -2540,7 +2540,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/MountainTerrain.csv
+  Path: MountainTerrain.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -2691,7 +2691,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/AngelStatue.csv
+  Path: AngelStatue.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
@@ -2842,7 +2842,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8ee8012d8256ece49bcffb8e73a7a359, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  Path: ../Datasets/CSV/EasternBuilding.csv
+  Path: EasternBuilding.csv
   FallbackColor:
     serializedVersion: 2
     rgba: 4278255360
