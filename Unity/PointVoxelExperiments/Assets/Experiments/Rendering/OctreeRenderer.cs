@@ -29,7 +29,7 @@ namespace dairin0d.Rendering {
         public struct DataItem {
             public int address;
             public int depth;
-            public Color32 color;
+            public int complexity;
             public int id;
         }
 
@@ -49,13 +49,13 @@ namespace dairin0d.Rendering {
         private System.Diagnostics.Stopwatch stopwatch = new System.Diagnostics.Stopwatch();
         public float FrameTime {get; private set;}
 
-        public void RenderStart(Color32 background) {
+        public void RenderStart() {
             stopwatch.Restart();
-            Clear(background);
+            Clear();
         }
         
-        public void RenderEnd(bool useAddress, int depth_shift = -1) {
-            Blit(useAddress, depth_shift);
+        public void RenderEnd(Color32 background, int depth_shift = -1) {
+            Blit(background, depth_shift);
             stopwatch.Stop();
             FrameTime = stopwatch.ElapsedMilliseconds / 1000f;
             UpdateTexture();
@@ -114,7 +114,7 @@ namespace dairin0d.Rendering {
             Texture.Apply(false);
         }
         
-        public unsafe void Blit(bool useAddress, int depth_shift = -1) {
+        public unsafe void Blit(Color32 background, int depth_shift = -1) {
             int w = Width;
             int h = Height;
             int shift = BufferShiftX;
@@ -176,10 +176,10 @@ namespace dairin0d.Rendering {
                             colors_x->r = colors_x->g = colors_x->b = d;
                             colors_x->a = 255;
                         } else if (show_complexity) {
-                            byte d = (byte)(data_x->id << complexity_shift);
+                            byte d = (byte)(data_x->complexity << complexity_shift);
                             colors_x->r = colors_x->g = colors_x->b = d;
                             colors_x->a = 255;
-                        } else if (useAddress & (data_x->address >= 0)) {
+                        } else if (data_x->address >= 0) {
                             // colors_x->r = (byte) (128 | (127 & (data_x->address >> 0)));
                             // colors_x->g = (byte) (128 | (127 & (data_x->address >> 8)));
                             // colors_x->b = (byte) (128 | (127 & (data_x->address >> 16)));
@@ -189,7 +189,7 @@ namespace dairin0d.Rendering {
                             colors_x->b = color.B;
                             colors_x->a = 255;
                         } else {
-                            *colors_x = data_x->color;
+                            *colors_x = background;
                         }
                         
                         if (useSubsample) {
@@ -223,12 +223,12 @@ namespace dairin0d.Rendering {
             }
         }
 
-        public unsafe void Clear(Color32 background) {
+        public unsafe void Clear() {
             var clear_data = default(DataItem);
             clear_data.address = -1;
             clear_data.depth = int.MaxValue;
-            clear_data.color = background;
             clear_data.id = 0;
+            clear_data.complexity = 0;
 
             int w = Width;
             int h = Height;
@@ -458,11 +458,11 @@ namespace dairin0d.Rendering {
             
             CollectRenderers(viewMatrix);
             
-            buffer.RenderStart(cam.backgroundColor);
+            buffer.RenderStart();
             
             splatter.RenderObjects(buffer, cam, EnumerateInstances());
             
-            buffer.RenderEnd(splatter.UseAddress, DepthDisplayShift);
+            buffer.RenderEnd(cam.backgroundColor, DepthDisplayShift);
         }
         
         IEnumerable<ModelInstance> EnumerateInstances() {
@@ -527,8 +527,6 @@ namespace dairin0d.Rendering {
         public bool DrawCircles = false;
         
         public int RadiusShift = 3;
-        
-        public bool UseAddress = false;
         
         int GeneralNodeCount;
         int AffineNodeCount;
@@ -680,7 +678,6 @@ namespace dairin0d.Rendering {
             toggleWidgets.Add(new Widget<bool>("Draw Cubes", () => DrawCubes, (value) => { DrawCubes = value; }));
             toggleWidgets.Add(new Widget<bool>("Draw Cubes 7", () => DrawCubes7, (value) => { DrawCubes7 = value; }));
             toggleWidgets.Add(new Widget<bool>("Update Cache", () => UpdateCache, (value) => { UpdateCache = value; }));
-            toggleWidgets.Add(new Widget<bool>("Use Address", () => UseAddress, (value) => { UseAddress = value; }));
         }
         
         public unsafe void RenderObjects(Buffer buffer, Camera camera, IEnumerable<ModelInstance> instances) {
@@ -864,13 +861,13 @@ namespace dairin0d.Rendering {
                     context.queues = octree.IsPacked ? context.packedQueues : context.sparseQueues;
                     var root = octree.Root;
                     RenderGeometry(ref context, projectedGrid, ref matrix, MaxLevel,
-                        root.Address, root.Mask, -1, (Color32) root.BaseColor);
+                        root.Address, root.Mask, -1);
                 }
             }
         }
         
         unsafe void RenderGeometry(ref Context context, ProjectedVertex* projectedGrid, ref Matrix4x4 matrix,
-            int maxLevel, int loadAddress, int nodeMask, int parentAddress, Color32 parentColor, int minY = 0)
+            int maxLevel, int loadAddress, int nodeMask, int parentAddress, int minY = 0)
         {
             GeneralNodeCount++;
             
@@ -928,10 +925,9 @@ namespace dairin0d.Rendering {
                             int _idx = idx, r2 = r2y;
                             for (int x = ixMin; x <= ixMax; x++) {
                                 var pixel = bufY + x;
-                                pixel->id += 1;
+                                pixel->complexity += 1;
                                 if ((iz < (pixel->depth & int.MaxValue)) & (r2 <= r2max)) {
                                     pixel->address = parentAddress;
-                                    pixel->color = parentColor;
                                     pixel->depth = iz;
                                 }
                                 r2 += _idx + _idx + 1;
@@ -946,10 +942,9 @@ namespace dairin0d.Rendering {
                             var bufY = context.buffer + (y << context.bufferShift);
                             for (int x = ixMin; x <= ixMax; x++) {
                                 var pixel = bufY + x;
-                                pixel->id += 1;
+                                pixel->complexity += 1;
                                 if (iz < (pixel->depth & int.MaxValue)) {
                                     pixel->address = parentAddress;
-                                    pixel->color = parentColor;
                                     pixel->depth = iz;
                                 }
                             }
@@ -962,7 +957,7 @@ namespace dairin0d.Rendering {
                         var bufY = context.buffer + (y << context.bufferShift);
                         for (int x = ixMin; x <= ixMax; x++) {
                             var pixel = bufY + x;
-                            pixel->id += 1;
+                            pixel->complexity += 1;
                             if (iz < (pixel->depth & int.MaxValue)) {
                                 minY = y;
                                 goto traverse;
@@ -981,7 +976,7 @@ namespace dairin0d.Rendering {
                     var sizeY = boundsMax.y - boundsMin.y;
                     var size = (sizeX > sizeY ? sizeX : sizeY);
                     if ((size < MaxAffineSize) && IsApproximatelyAffine(projectedGrid, ref matrix)) {
-                        RenderAffine(ref context, ref matrix, maxLevel, loadAddress, nodeMask, parentAddress, parentColor);
+                        RenderAffine(ref context, ref matrix, maxLevel, loadAddress, nodeMask, parentAddress);
                         return;
                     }
                 }
@@ -1042,24 +1037,20 @@ namespace dairin0d.Rendering {
                 int octantMask;
                 int octantLoadAddress;
                 int octantAddress;
-                Color32 octantColor;
                 
                 if (isCube) {
                     octantAddress = parentAddress;
                     octantMask = 0xFF;
                     octantLoadAddress = -1;
-                    octantColor = parentColor;
                 } else {
                     octantAddress = absAddress + unchecked((int)(queue.Indices & 7));
                     var subnode = subnodes + (queue.Indices & 7);
                     octantMask = subnode->Mask;
                     octantLoadAddress = subnode->Address;
-                    var octantColor24 = subnode->BaseColor;
-                    octantColor = new Color32 {r = octantColor24.R, g = octantColor24.G, b = octantColor24.B, a = 255};
                 }
                 
                 RenderGeometry(ref context, octantGrid, ref matrix,
-                    maxLevel-1, octantLoadAddress, octantMask, octantAddress, octantColor, minY);
+                    maxLevel-1, octantLoadAddress, octantMask, octantAddress, minY);
             }
         }
         
@@ -1165,7 +1156,7 @@ namespace dairin0d.Rendering {
         }
         
         unsafe void RenderAffine(ref Context context, ref Matrix4x4 matrix,
-            int maxLevel, int loadAddress, int parentMask, int parentAddress, Color32 parentColor)
+            int maxLevel, int loadAddress, int parentMask, int parentAddress)
         {
             SetupAffine(ref context, in matrix, out int potShift,
                 out int centerX, out int centerY, out int extentX, out int extentY, out int startZ, out float radius);
@@ -1219,7 +1210,6 @@ namespace dairin0d.Rendering {
             curr->info = new OctreeNode {
                 Address = loadAddress,
                 Mask = (byte)parentMask,
-                BaseColor = new Color24 {R=parentColor.r, G=parentColor.g, B=parentColor.b},
             };
             
             {
@@ -1228,7 +1218,7 @@ namespace dairin0d.Rendering {
                     var bufY = context.buffer + (y << context.bufferShift);
                     for (int x = state.x0; x <= state.x1; x++) {
                         var pixel = bufY + x;
-                        pixel->id += 1;
+                        pixel->complexity += 1;
                         pixel->depth &= int.MaxValue;
                     }
                 }
@@ -1256,17 +1246,10 @@ namespace dairin0d.Rendering {
                         var bufY = context.buffer + (y << context.bufferShift);
                         for (int x = state.x0; x <= state.x1; x++) {
                             var pixel = bufY + x;
-                            pixel->id += 1;
+                            pixel->complexity += 1;
                             
                             if (state.z < pixel->depth) {
                                 pixel->address = state.address;
-                                var color24 = state.info.BaseColor;
-                                pixel->color = new Color32 {
-                                    r = color24.R,
-                                    g = color24.G,
-                                    b = color24.B,
-                                    a = 255
-                                };
                                 pixel->depth = state.z | int.MinValue;
                             }
                         }
@@ -1281,7 +1264,7 @@ namespace dairin0d.Rendering {
                     var bufY = context.buffer + (y << context.bufferShift);
                     for (int x = state.x0; x <= state.x1; x++) {
                         var pixel = bufY + x;
-                        pixel->id += 1;
+                        pixel->complexity += 1;
                         if (state.z < pixel->depth) {
                             lastY = y;
                             goto traverse;
@@ -1358,7 +1341,6 @@ namespace dairin0d.Rendering {
                             curr->address = state.address;
                             curr->info.Address = -1;
                             curr->info.Mask = 0xFF;
-                            curr->info.BaseColor = state.info.BaseColor;
                         } else {
                             curr->address = absAddress + unchecked((int)(queue.Indices & 7));
                             curr->info = subnodes[queue.Indices & 7];
@@ -1396,19 +1378,10 @@ namespace dairin0d.Rendering {
                             int _idx = idx, r2 = r2y;
                             for (int x = x0; x <= x1; x++) {
                                 var pixel = bufY + x;
-                                pixel->id += 1;
+                                pixel->complexity += 1;
                                 
                                 if ((z < pixel->depth) & (r2 <= r2max)) {
                                     pixel->address = absAddress + unchecked((int)(queue.Indices & 7));
-                                    if (!UseAddress) {
-                                        var color24 = subnodes[queue.Indices & 7].BaseColor;
-                                        pixel->color = new Color32 {
-                                            r = color24.R,
-                                            g = color24.G,
-                                            b = color24.B,
-                                            a = 255
-                                        };
-                                    }
                                     pixel->depth = z | int.MinValue;
                                 }
                                 
@@ -1438,38 +1411,14 @@ namespace dairin0d.Rendering {
                                 var octant = unchecked((int)(forwardQueues[mask].Octants & 7));
                                 
                                 int z = state.z + (context.deltas[octant].z >> state.level);
-                                pixel->id += 1;
+                                pixel->complexity += 1;
                                 
                                 if (z < pixel->depth) {
                                     if (isCube) {
                                         pixel->address = state.address;
-                                        pixel->color = new Color32 {
-                                            r = state.info.BaseColor.R,
-                                            g = state.info.BaseColor.G,
-                                            b = state.info.BaseColor.B,
-                                            a = 255
-                                        };
                                     } else {
                                         int index = context.isPacked ? context.octantToIndex[nodeMaskKey | octant] : octant;
                                         pixel->address = absAddress + index;
-                                        if (!UseAddress) {
-                                            var color24 = subnodes[index].BaseColor;
-                                            if (state.level >= maxLevel) {
-                                                pixel->color = new Color32 {
-                                                    r = (byte)((color24.R * blendFactorInv + state.info.BaseColor.R * blendFactor + 255) >> 8),
-                                                    g = (byte)((color24.G * blendFactorInv + state.info.BaseColor.G * blendFactor + 255) >> 8),
-                                                    b = (byte)((color24.B * blendFactorInv + state.info.BaseColor.B * blendFactor + 255) >> 8),
-                                                    a = 255
-                                                };
-                                            } else {
-                                                pixel->color = new Color32 {
-                                                    r = color24.R,
-                                                    g = color24.G,
-                                                    b = color24.B,
-                                                    a = 255
-                                                };
-                                            }
-                                        }
                                     }
                                     pixel->depth = z | int.MinValue;
                                 }
