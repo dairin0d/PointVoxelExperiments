@@ -900,6 +900,7 @@ namespace dairin0d.Rendering {
                 bool isSinglePixel = (ixMin == ixMax) & (iyMin == iyMax);
                 
                 if ((!DrawCubes & (nodeMask == 0)) | isSinglePixel) {
+                    /*
                     if (DrawCircles & !isSinglePixel) {
                         float cx = (boundsMin.x + boundsMax.x) * 0.5f;
                         float cy = (boundsMin.y + boundsMax.y) * 0.5f;
@@ -950,8 +951,10 @@ namespace dairin0d.Rendering {
                             }
                         }
                     }
+                    */
                     return;
                 } else {
+                    /*
                     // Occlusion test
                     for (int y = iyMin; y <= iyMax; y++) {
                         var bufY = context.buffer + (y << context.bufferShift);
@@ -966,6 +969,7 @@ namespace dairin0d.Rendering {
                     }
                     return;
                     traverse:;
+                    */
                 }
                 
                 // If distortion is less than pixel, switch to affine processing
@@ -1177,15 +1181,6 @@ namespace dairin0d.Rendering {
             int reverseKey = forwardKey ^ 0b11100000000;
             var forwardQueues = context.queues + forwardKey;
             var reverseQueues = context.queues + reverseKey;
-            
-            int bufMask = (1 << context.bufferShift) - 1;
-            int bufMaskInv = ~bufMask;
-            
-            int maxExtent = (extentX > extentY ? extentX : extentY);
-            float subpixelFactor = (maxExtent >> (maxLevel - 1)) / (float)SubpixelSize;
-            
-            int blendFactor = (int)(Mathf.Clamp01(0.5f - subpixelFactor) * 4 * 255);
-            int blendFactorInv = 255 - blendFactor;
             
             bool updateCache = UpdateCache;
             

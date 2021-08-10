@@ -46,6 +46,10 @@ namespace dairin0d.Rendering {
         public bool UsePackedOctree = false;
         public bool Preload = false;
         
+        public OctreeSorter.SortMode SortMode = OctreeSorter.SortMode.None;
+        
+        public int PointDecimation = 0;
+        
         private static Dictionary<string, Model3D> loadedModels = new Dictionary<string, Model3D>();
         
         void Awake() {
@@ -61,15 +65,35 @@ namespace dairin0d.Rendering {
             
             if (loadedModels.TryGetValue(Path, out var model)) return model;
             
-            model = MakeModel(RawOctree.LoadPointCloud(Path, VoxelSize), System.IO.Path.GetFileNameWithoutExtension(Path));
+            model = MakeModel(RawOctree.LoadPointCloud(Path, VoxelSize, PointDecimation), System.IO.Path.GetFileNameWithoutExtension(Path));
             loadedModels[Path] = model;
             return model;
         }
         
         Model3D MakeModel(RawOctree octree, string name) {
+            if (!string.IsNullOrEmpty(Path) && (SortMode != OctreeSorter.SortMode.None)) {
+                var savePath = RawOctree.AddPathPrefix(Path) + $".{SortMode}";
+                if (!File.Exists(savePath)) {
+                    OctreeSorter.Sort(savePath, SortMode, octree.Nodes, octree.Colors, octree.RootNode, octree.RootColor);
+                }
+            }
+            
             var chunkedOctree = (string.IsNullOrEmpty(Path) || !UsePackedOctree)
                 ? ChunkedOctree.FromRawOctree(octree.RootNode, octree.RootColor, octree.Nodes, octree.Colors)
                 : ChunkedOctree.PackRawOctree(octree.RootNode, octree.RootColor, octree.Nodes, octree.Colors, BlockSizeShift, Compress, Preload);
+            
+            if (chunkedOctree.IsPacked) {
+                var extensionBase = Compress ? "compressed" : "packed";
+                var savePath = RawOctree.AddPathPrefix(Path) + $".{extensionBase}{BlockSizeShift}";
+                if (!File.Exists(savePath)) {
+                    Debug.Log(savePath);
+                    using (var fileStream = new FileStream(savePath, FileMode.Create)) {
+                        var binaryWriter = new BinaryWriter(fileStream);
+                        chunkedOctree.Write(binaryWriter);
+                        binaryWriter.Flush();
+                    }
+                }
+            }
             
             var model = new Model3D();
             model.Name = name;
@@ -110,13 +134,23 @@ namespace dairin0d.Rendering {
         public Color32[] Colors;
 
         // This is a hack to access the same folder both in editor and in build
-        private static string PathPrefix;
+        private static string pathPrefix;
+        
+        public static string AddPathPrefix(string path) {
+            InitializePathPrefix();
+            
+            if (!Path.IsPathRooted(path) && !string.IsNullOrEmpty(pathPrefix)) {
+                path = Path.Combine(pathPrefix, path);
+            }
+            
+            return path;
+        }
         
         private static void InitializePathPrefix() {
-            if (PathPrefix != null) return;
+            if (pathPrefix != null) return;
             var configPath = Application.isEditor ? "ModelsPathInEditor" : "ModelsPathInBuild";
             var textAsset = Resources.Load<TextAsset>(configPath);
-            PathPrefix = textAsset ? textAsset.text : "";
+            pathPrefix = textAsset ? textAsset.text : "";
         }
 
         public static RawOctree MakeFractal(byte mask, Color32 color) {
@@ -136,12 +170,8 @@ namespace dairin0d.Rendering {
             };
         }
 
-        public static RawOctree LoadPointCloud(string path, float voxel_size = -1) {
-            InitializePathPrefix();
-            
-            if (!Path.IsPathRooted(path) && !string.IsNullOrEmpty(PathPrefix)) {
-                path = Path.Combine(PathPrefix, path);
-            }
+        public static RawOctree LoadPointCloud(string path, float voxel_size = -1, int pointDecimation = 0) {
+            path = AddPathPrefix(path);
             
             if (string.IsNullOrEmpty(path)) return null;
 
@@ -169,6 +199,10 @@ namespace dairin0d.Rendering {
 
             var octree = new LeafOctree<Color32>();
             foreach (var voxinfo in discretizer.EnumerateVoxels()) {
+                if (pointDecimation > 1) {
+                    if (Random.Range(0, pointDecimation) != 0) continue;
+                }
+                
                 var node = octree.GetNode(voxinfo.pos, OctreeAccess.AutoInit);
                 node.data = voxinfo.color;
             }
@@ -328,6 +362,133 @@ namespace dairin0d.Rendering {
             color.a *= color_scale;
 
             return (mask, color);
+        }
+    }
+    
+    public static class OctreeSorter {
+        public enum SortMode {
+            None,
+            DepthSorted,
+            BreadthSorted,
+            RandomSorted
+        }
+        
+        private struct NodeData {
+            public uint Address;
+            public byte Mask;
+            public Color24 Color;
+            public int ParentIndex;
+            public NodeData[] ParentArray;
+            public NodeData[] Children;
+        }
+        
+        public static void Sort(string savePath, SortMode mode, int[] nodes, Color32[] colors, int node, Color32 color) {
+            if (mode == SortMode.None) return;
+            var root = Build(nodes, colors, node, color, out int count);
+            var list = new List<NodeData[]>(count);
+            if (mode == SortMode.DepthSorted) {
+                SortDepth(root, list);
+            } else if (mode == SortMode.BreadthSorted) {
+                SortBreadth(root, list);
+            } else if (mode == SortMode.RandomSorted) {
+                SortDepth(root, list);
+                Shuffle(list, 1, list.Count-1);
+            }
+            AssignAddresses(list);
+            Write(savePath, list);
+        }
+        
+        private static void SortDepth(NodeData[] array, List<NodeData[]> list) {
+            list.Add(array);
+            
+            for (int i = 0; i < 8; i++) {
+                var children = array[i].Children;
+                if (children == null) continue;
+                SortDepth(children, list);
+            }
+        }
+        
+        private static void SortBreadth(NodeData[] array, List<NodeData[]> list) {
+            var queue = new Queue<NodeData[]>();
+            queue.Enqueue(array);
+            
+            while (queue.Count > 0) {
+                array = queue.Dequeue();
+                list.Add(array);
+                
+                for (int i = 0; i < 8; i++) {
+                    var children = array[i].Children;
+                    if (children == null) continue;
+                    queue.Enqueue(children);
+                }
+            }
+        }
+        
+        private static void Shuffle<T>(IList<T> list, int imin, int imax)
+        {
+            // imax is inclusive
+            for (int i = imin; i < imax; i++) {
+                int k = Random.Range(i, imax+1);
+                T value = list[k];
+                list[k] = list[i];
+                list[i] = value;
+            }
+        }
+        
+        private static void Write(string savePath, List<NodeData[]> list) {
+            using (var fileStream = new FileStream(savePath, FileMode.Create)) {
+                var binaryWriter = new BinaryWriter(fileStream);
+                
+                for (int j = 0; j < list.Count; j++) {
+                    var array = list[j];
+                    for (int i = 0; i < 8; i++) {
+                        binaryWriter.Write(array[i].Address);
+                        binaryWriter.Write(array[i].Mask);
+                        binaryWriter.Write(array[i].Color.R);
+                        binaryWriter.Write(array[i].Color.G);
+                        binaryWriter.Write(array[i].Color.B);
+                    }
+                }
+                
+                binaryWriter.Flush();
+            }
+        }
+        
+        private static void AssignAddresses(List<NodeData[]> list) {
+            for (int j = 0; j < list.Count; j++) {
+                var firstChild = list[j][0];
+                if (firstChild.ParentArray == null) continue;
+                firstChild.ParentArray[firstChild.ParentIndex].Address = (uint)(j * 8);
+            }
+        }
+        
+        private static NodeData[] Build(int[] nodes, Color32[] colors, int node, Color32 color, out int count) {
+            count = 1;
+            var array = new NodeData[8];
+            Build(array, 0, nodes, colors, node, color, ref count);
+            return array;
+        }
+        
+        private static void Build(NodeData[] array, int index, int[] nodes, Color32[] colors, int node, Color32 color, ref int count) {
+            var mask = (byte)(node & 0xFF);
+            var address = ((node >> 8) & 0xFFFFFF) << 3;
+            
+            array[index].Mask = mask;
+            array[index].Color = new Color24 {R = color.r, G = color.g, B = color.b};
+            
+            if (mask == 0) return;
+            
+            count++;
+            var children = new NodeData[8];
+            array[index].Children = children;
+            
+            for (int i = 0; i < 8; i++) {
+                children[i].ParentIndex = index;
+                children[i].ParentArray = array;
+                
+                if ((mask & (1 << i)) == 0) continue;
+                Build(children, i, nodes, colors, nodes[address|i], colors[address|i], ref count);
+            }
         }
     }
 }

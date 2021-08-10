@@ -277,6 +277,24 @@ namespace dairin0d.Rendering {
             return octree;
         }
         
+        public void Write(BinaryWriter stream) {
+            if (!isPacked) throw new System.InvalidOperationException("Octree is not packed");
+            
+            stream.Write((byte)chunkShift);
+            stream.Write(isCompressed);
+            
+            stream.Write(packInfos.Length);
+            foreach (var packInfo in packInfos) {
+                stream.Write(packInfo.StartOffset);
+                stream.Write(packInfo.PackedStart);
+                stream.Write(packInfo.PackedSize);
+                stream.Write(packInfo.NodeCount);
+            }
+            
+            stream.Write(packedData.Length);
+            stream.Write(packedData);
+        }
+        
         public unsafe void Unpack(int chunkIndex) {
             GCHandle dataHandle = default;
             OctreeNode* dataPointer = null;
