@@ -50,6 +50,8 @@ namespace dairin0d.Rendering {
         
         public int PointDecimation = 0;
         
+        public bool TestDAG = false;
+        
         private static Dictionary<string, Model3D> loadedModels = new Dictionary<string, Model3D>();
         
         void Awake() {
@@ -95,6 +97,10 @@ namespace dairin0d.Rendering {
                 }
             }
             
+            if (TestDAG) {
+                ConvertToDAG(octree.Nodes, octree.Colors, octree.RootNode, octree.RootColor);
+            }
+            
             var model = new Model3D();
             model.Name = name;
             
@@ -124,6 +130,142 @@ namespace dairin0d.Rendering {
             };
             
             return model;
+        }
+        
+        private void ConvertToDAG(int[] nodes, Color32[] colors, int node, Color32 color) {
+            int maxLevel = 0, count = 0;
+            var root = ToLinkedOctree(nodes, colors, node, color, ref count, ref maxLevel);
+            Debug.Log($"count = {count}, maxLevel = {maxLevel}");
+            
+            var histogram = new int[maxLevel + 1];
+            MakeHistogram(root, 0, histogram);
+            
+            for (int level = 0; level < histogram.Length; level++) {
+                Debug.Log($"{level}: {histogram[level]}");
+            }
+            
+            // Dictionary<DAGNode, DAGNode> uniqueNodes = null;
+            // for (int level = maxLevel; level >= 0; level--) {
+            //     uniqueNodes = Merge(root, level, uniqueNodes);
+            //     int levelCount = CountChildren(uniqueNodes);
+            //     Debug.Log($"level {level}: unique = {uniqueNodes.Count}, count = {levelCount}");
+            // }
+        }
+        
+        private void MakeHistogram(DAGNode node, int level, int[] histogram) {
+            histogram[level] += 1;
+            
+            for (int i = 0; i < 8; i++) {
+                if ((node.data.Mask & (1 << i)) == 0) continue;
+                MakeHistogram(node[i] as DAGNode, level+1, histogram);
+            }
+        }
+        
+        private int CountChildren(Dictionary<DAGNode, DAGNode> nodes) {
+            int count = 0;
+            foreach (var node in nodes.Keys) {
+                count += node.Count;
+            }
+            return count;
+        }
+        
+        private Dictionary<DAGNode, DAGNode> Merge(DAGNode root, int targetLevel, Dictionary<DAGNode, DAGNode> prevNodes) {
+            if (prevNodes != null) {
+                MergeNodes(root, targetLevel, 0, prevNodes);
+            }
+            
+            var levelNodes = new Dictionary<DAGNode, DAGNode>();
+            CollectNodes(root, targetLevel, 0, levelNodes);
+            
+            return levelNodes;
+        }
+        
+        private void CollectNodes(DAGNode node, int targetLevel, int level,
+            Dictionary<DAGNode, DAGNode> levelNodes)
+        {
+            if (level == targetLevel) {
+                levelNodes[node] = node;
+            } else {
+                for (int i = 0; i < 8; i++) {
+                    if ((node.data.Mask & (1 << i)) == 0) continue;
+                    CollectNodes(node[i] as DAGNode, targetLevel, level+1, levelNodes);
+                }
+            }
+        }
+        
+        private void MergeNodes(DAGNode node, int targetLevel, int level,
+            Dictionary<DAGNode, DAGNode> prevNodes)
+        {
+            if (level == targetLevel) {
+                for (int i = 0; i < 8; i++) {
+                    if ((node.data.Mask & (1 << i)) == 0) continue;
+                    var subnode = node[i] as DAGNode;
+                    if (prevNodes.TryGetValue(subnode, out var foundNode)) {
+                        node[i] = foundNode;
+                    }
+                }
+            } else {
+                for (int i = 0; i < 8; i++) {
+                    if ((node.data.Mask & (1 << i)) == 0) continue;
+                    MergeNodes(node[i] as DAGNode, targetLevel, level+1, prevNodes);
+                }
+            }
+        }
+        
+        private DAGNode ToLinkedOctree(int[] nodes, Color32[] colors, int node, Color32 color, ref int count, ref int maxLevel, int level = 0) {
+            count++;
+            if (maxLevel < level) maxLevel = level;
+            
+            int mask = node & 0xFF;
+            
+            var data = new NodeData {
+                Mask = (byte)mask,
+                Color = new Color24 {R = color.r, G = color.g, B = color.b}
+            };
+            
+            var dagNode = new DAGNode();
+            dagNode.data = data;
+            
+            int nodeIndex = (node >> 8) & 0xFFFFFF;
+            int address = nodeIndex << 3;
+            
+            for (int i = 0; i < 8; i++) {
+                if ((mask & (1 << i)) == 0) continue;
+                dagNode[i] = ToLinkedOctree(nodes, colors, nodes[address|i], colors[address|i], ref count, ref maxLevel, level + 1);
+            }
+            
+            return dagNode;
+        }
+        
+        // https://stackoverflow.com/questions/37118089/hashing-an-array-in-c-sharp
+        private static int CombineHashCodes(int h1, int h2) {
+            return (((h1 << 5) + h1) ^ h2);
+        }
+        
+        private class DAGNode : OctreeNode<NodeData> {
+            public override bool Equals(object obj) {
+                if (!(obj is DAGNode node)) return false;
+                if (node.data.Mask != data.Mask) return false;
+                for (int i = 0; i < 8; i++) {
+                    if (this[i] != node[i]) return false;
+                }
+                return true;
+            }
+            
+            public override int GetHashCode() {
+                int hash = data.Mask;
+                for (int i = 0; i < 8; i++) {
+                    var child = this[i];
+                    if (child == null) continue;
+                    hash = CombineHashCodes(hash, child.GetHashCode());
+                }
+                return hash;
+            }
+        }
+        
+        private struct NodeData {
+            public byte Mask;
+            public Color24 Color;
         }
     }
 
